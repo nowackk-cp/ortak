@@ -7,6 +7,30 @@ const LANG = 'Kullanıcının yazdığı dilde cevap ver.';
 const READ_ONLY = 'Hiçbir dosyayı oluşturma, değiştirme veya silme ve sistemi değiştiren komut çalıştırma; gerekirse dosyaları yalnızca oku.';
 const SUMMARY_LINE = 'Bitirdiğinde en son satıra "ÖZET: <yaptıklarının tek cümlelik özeti>" yaz.';
 
+// Readers (lead, planner, reviewer) always run read-only, whatever the run's permission: they
+// plan and check, workers write. A model that sees its own read-only sandbox (Codex: "sandbox
+// read-only, approval never") easily takes it for the whole run's and starts "diagnosing" a
+// write block that doesn't exist — so every prompt says what the workers may do.
+const OWN_READ_ONLY =
+  'Senin oturumun BİLEREK salt okunur açılır, çünkü sen yalnızca planlar ve denetlersin; bu yalnızca SENİN kısıtın, ' +
+  'çalışmanın yetkisi değildir. Kendi ortamında gördüğün salt okunur / sandbox / onay politikası bilgisini ekibe ait sanma: ' +
+  'bunu teşhis etmeye ya da aşmaya çalışma ve bunun için görev verme.';
+
+const PERMISSION_TR = {
+  'read-only': 'SALT OKUNUR — alt ajanlar da dosya değiştiremez; inceleme, analiz ve öneri görevleri ver.',
+  edit: 'DÜZENLEME — alt ajanlar proje klasöründe dosya yazar ve komut çalıştırır (git commit/push, global kurulum gibi tehlikeli komutlar hariç).',
+  full: 'TAM YETKİ — alt ajanlar onay sormadan dosya yazar ve her komutu çalıştırır.',
+};
+
+/** "Bu çalışmanın yetkisi: TAM YETKİ — …" (in every lead / planner / reviewer prompt, sessions resumed too). */
+export function permissionLine(permission, who = 'alt ajanlar') {
+  const p = PERMISSION_TR[permission];
+  if (!p) return '';
+  return `Bu çalışmanın yetkisi: ${who === 'alt ajanlar' ? p : p.replace(/alt ajanlar/g, who)} ` +
+    'Senin oturumun ise bilerek salt okunur; bu, ekibin yazma yetkisini etkilemez.\n\n';
+}
+
+
 const ANSWER_MAX = 8000;
 const DIFF_MAX = 60_000;
 
@@ -150,15 +174,15 @@ export function parallelFollowFresh(task, lastText, userText) {
 
 // ---- team -------------------------------------------------------------------------------------
 
-export const plannerSystem = `Bir yazılım ekibinin planlayıcısısın. ${LANG} ${READ_ONLY}`;
+export const plannerSystem = `Bir yazılım ekibinin planlayıcısısın. ${LANG} ${READ_ONLY} ${OWN_READ_ONLY}`;
 
 /** Messages the user sent while the run was going (they steer the remaining work). */
 function notesBlock(notes) {
   return notes?.length ? `Kullanıcının çalışma sırasında eklediği notlar:\n${notes.map((n) => `- ${clip(n, 2000)}`).join('\n')}\n\n` : '';
 }
 
-export function plan(goal, notes) {
-  return `Görev:\n${goal}\n\n${notesBlock(notes)}` +
+export function plan(goal, notes, permission) {
+  return `Görev:\n${goal}\n\n${notesBlock(notes)}${permissionLine(permission, 'çalışanlar')}` +
     'Projeyi gerektiği kadar incele ve görevi sırayla uygulanacak 1–6 adıma böl. Her adım tek bir çalışanın tek ' +
     'seferde yapabileceği somut ve doğrulanabilir bir iş olsun (hangi dosyalar, kabul ölçütü). ' +
     'Cevabının sonunda planı tam olarak şu biçimde tek bir ```json bloğu olarak ver:\n' +
@@ -187,7 +211,7 @@ export function workerStep({ goal, steps, index, summaries, notes, retry }) {
     'Bu adımı şimdi uygula.';
 }
 
-export const reviewerSystem = `Bir yazılım ekibinin denetçisisin. ${LANG} ${READ_ONLY}`;
+export const reviewerSystem = `Bir yazılım ekibinin denetçisisin. ${LANG} ${READ_ONLY} ${OWN_READ_ONLY}`;
 
 const REVIEW_HANDS = 'Diff\'te göremediğin ya da emin olmadığın yerler hakkında tahmin yürütme: ilgili dosyaları oku, gerekirse testleri çalıştır.';
 
@@ -202,8 +226,9 @@ const REVIEW_RULE =
  * of `prevIssues`. A resumed reviewer already has the goal, plan and its earlier review in its session.
  * `request` = the user's follow-up request this review is about.
  */
-export function review({ goal, steps, summaries, notes, diff, round = 1, prevIssues, fix, request, resumed }) {
+export function review({ goal, steps, summaries, notes, diff, round = 1, prevIssues, fix, request, resumed, permission }) {
   const parts = [];
+  if (PERMISSION_TR[permission]) parts.push(permissionLine(permission, 'çalışanlar').trim());
   if (!resumed) {
     parts.push(`Genel hedef:\n${goal}`, `Plan:\n${planList(steps || [])}`, `Adım özetleri:\n${prevSummaries(summaries)}`);
     if (notes?.length) parts.push(notesBlock(notes).trim());
@@ -486,7 +511,7 @@ export function withAttachments(text, files, images = []) {
 export const leadSystem =
   'Bir yazılım ekibinin yöneticisisin (lider). Kendin kod yazmaz, dosya değiştirmez, komut çalıştırmazsın: ' +
   'işi alt ajanlara dağıtır, sonuçlarını denetler, gerekirse düzeltme görevi verirsin. ' +
-  `Proje dosyalarını okuyarak denetleyebilirsin. ${LANG} ${READ_ONLY}`;
+  `Proje dosyalarını okuyarak denetleyebilirsin. ${LANG} ${READ_ONLY} ${OWN_READ_ONLY}`;
 
 const COST_TR = {
   free: 'ÜCRETSİZ',
@@ -546,8 +571,8 @@ const PARALLEL_RULES =
   '- Her ajan aynı anda tek iş yapar; aynı ajana verdiğin görevler sırayla çalışır. Hız için işleri farklı ajanlara dağıt.\n' +
   '- Aynı dosyayı değiştiren iki görev aynı anda çalışmasın: ya tek görevde birleştir ya da "after" ile sırala.\n';
 
-export function leadStart({ goal, workers, readOnly, maxSteps, budget }) {
-  return `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
+export function leadStart({ goal, workers, readOnly, maxSteps, budget, permission = readOnly ? 'read-only' : undefined }) {
+  return `Kullanıcının isteği:\n${goal}\n\n${permissionLine(permission)}Ekibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
     'Kurallar:\n' +
     '- Gerekirse önce projeyi incele, sonra işi parçalara böl ve her parçayı en uygun ajana ver: zor işleri güçlü modellere, basit işleri hızlı ve ucuz modellere.\n' +
     rules(budget, workers) +
@@ -555,7 +580,6 @@ export function leadStart({ goal, workers, readOnly, maxSteps, budget }) {
     '- Görevler bitince raporları ve değişikliklerin diff\'i sana gelir; bir görev başarısız olursa diğerleri sürerken hemen haber verilir. ' +
     'Denetle; hata ya da eksik varsa somut bir düzeltme görevi ver. Test/çalıştırma gerekiyorsa komut çalıştırabilen bir ajana ver.\n' +
     '- Sen kod yazma; "tasks" içinde kod değil, talimat ver.\n' +
-    (readOnly ? '- Bu çalışma SALT OKUNUR: ajanlar dosya değiştiremez; inceleme, analiz ve öneri görevleri ver.\n' : '') +
     `\nEn fazla ${maxSteps} denetim turun var.\n\n${LEAD_FORMAT}`;
 }
 
@@ -586,11 +610,11 @@ function history(log) {
 }
 
 /** `reports` = [{ id, handle, task, ok, skipped?, secs?, text, applied?, failed? }] */
-export function leadReport({ round, maxRounds, reports, running, waiting, diff, warnings, goal, resumed }) {
+export function leadReport({ round, maxRounds, reports, running, waiting, diff, warnings, goal, resumed, permission }) {
   const body = reportBlocks(reports);
   const busy = running.length || waiting.length;
   const final = round >= maxRounds;
-  return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\n`) +
+  return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\n`) + permissionLine(permission) +
     `Denetim ${round}/${maxRounds}. Biten görevler:\n\n${body || '(yok)'}\n\n` +
     (running.length ? `Hâlâ süren görevler (bitince raporları gelecek; bunları yeniden verme):\n${taskLines(running)}\n\n` : '') +
     (waiting.length ? `Başlamayı bekleyen görevler:\n${taskLines(waiting)}\n\n` : '') +
@@ -606,14 +630,15 @@ export function leadReport({ round, maxRounds, reports, running, waiting, diff, 
     `\n\n${LEAD_FORMAT}`;
 }
 
-export function leadUser({ text, workers, maxSteps, goal, resumed, log, budget }) {
+export function leadUser({ text, workers, maxSteps, goal, resumed, log, budget, permission }) {
   return (resumed ? '' : `İlk istek:\n${goal}\n\nEkibin:\n${teamList(workers)}\n\nKurallar:\n${rules(budget, workers)}\n${history(log)}`) +
+    permissionLine(permission) +
     `Kullanıcının yeni mesajı:\n${text}\n\nBuna göre ekibe görev ver ya da iş gerekmiyorsa done:true ile cevapla. En fazla ${maxSteps} denetim turun var.\n\n${LEAD_FORMAT}`;
 }
 
 /** Prepended when the lead's session was lost: the context a fresh session needs. */
-export function leadRecap({ goal, workers, log, budget }) {
-  return `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
+export function leadRecap({ goal, workers, log, budget, permission }) {
+  return `Kullanıcının isteği:\n${goal}\n\n${permissionLine(permission)}Ekibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
     `Kurallar:\n${rules(budget, workers)}\n${history(log)}` +
     '(Önceki oturumun kayboldu; gerekirse projenin şu anki hâlini dosyaları okuyarak incele.)\n\n';
 }
@@ -622,8 +647,9 @@ export function leadRecap({ goal, workers, log, budget }) {
  * The run stopped mid-way (usage limit, error, cancel, restart) and the user wants to go on:
  * reports the lead never saw + tasks that didn't finish.
  */
-export function leadResume({ text, interrupted, unseen, open, log, workers, maxSteps, goal, resumed, budget }) {
+export function leadResume({ text, interrupted, unseen, open, log, workers, maxSteps, goal, resumed, budget, permission }) {
   return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\nKurallar:\n${rules(budget, workers)}\n${history(log)}`) +
+    permissionLine(permission) +
     `Çalışma yarıda kesilmişti${interrupted?.reason ? ` (${clip(interrupted.reason, 300)})` : ''}.\n\n` +
     (unseen.length ? `Sen görmeden biten görevlerin raporları:\n\n${reportBlocks(unseen)}\n\n` : '') +
     (open.length

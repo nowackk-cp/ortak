@@ -63,6 +63,8 @@ test('plan → adımlar → inceleme → düzeltme → onay', async () => {
   const [r1, r2] = callsOf(ctx, 'reviewer');
   assert.match(r1.prompt, /a\.txt \(\+1 −0\) — yeni/);
   assert.match(r1.prompt, /KARAR: ONAY/);
+  assert.match(r1.prompt, /Bu çalışmanın yetkisi: DÜZENLEME — çalışanlar proje klasöründe dosya yazar/);
+  assert.match(callsOf(ctx, 'planner')[0].prompt, /Bu çalışmanın yetkisi: DÜZENLEME/);
   assert.equal(r2.resumed, true);
   assert.match(r2.prompt, /Çalışan 1 bildirilen sorunlar için düzeltme yaptı: a\.txt düzeltildi/);
   assert.match(r2.prompt, /\+a dogru/);

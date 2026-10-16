@@ -29,6 +29,8 @@ test('yönetici bütçe kurallarını ve ajanların ücret sınıfını görür;
   assert.match(first, /@sonnet — Claude Code · Sonnet 5\.5 — ABONELİK — kullanıcının ücretli plan limitini harcar \(YEDEK\)/);
   assert.match(first, /BÜTÇE \(ücretsiz öncelikli\)/);
   assert.match(first, /KENDİ LİMİTİNİ KORU/);
+  assert.match(first, /Bu çalışmanın yetkisi: DÜZENLEME — alt ajanlar proje klasöründe dosya yazar/);
+  assert.match(callsOf(ctx, 'lead')[0].system, /BİLEREK salt okunur açılır/);
   assert.ok(notes(ctx).some((t) => /t1: @qwen limiti doldu; görev @argon ajanına devredildi/.test(t)), notes(ctx).join('\n'));
   assert.ok(notes(ctx).some((t) => /Ekip \(otomatik · ücretsiz öncelikli\)/.test(t)));
   assert.equal(callsOf(ctx, 'claude').length, 0, 'abonelikli yedek kullanılmadı');
@@ -53,4 +55,19 @@ test('limiti dolan ajana sonradan verilen görev başka ajana yönlendirilir', a
   assert.equal(callsOf(ctx, 'groq').length, 0);
   assert.equal(callsOf(ctx, 'gemini').length, 1);
   assert.ok(notes(ctx).some((t) => /@qwen limitine ulaşmıştı; görev @argon ajanına verildi/.test(t)));
+});
+
+test('tam yetkili çalışmada yönetici her mesajda ekibin yazabildiğini öğrenir (oturum sürse de)', async () => {
+  const cwd = await makeRepo();
+  const ctx = fakeCtx({
+    cwd, lanes: LANES, agents: AGENTS, config: { mode: 'lead', budget: 'free-first', steps: 4, permission: 'full' },
+    script: async (lane, opts, call) => (lane === 'lead' ? DONE : 'ÖZET: tamam'),
+  });
+  await lead.start(ctx);
+  await lead.followUp(ctx, { text: 'devam et ve testleri yaz' });
+  const [first, second] = callsOf(ctx, 'lead');
+  assert.match(first.prompt, /TAM YETKİ — alt ajanlar onay sormadan dosya yazar/);
+  assert.equal(second.resumed, true);
+  assert.match(second.prompt, /^Bu çalışmanın yetkisi: TAM YETKİ/);
+  assert.doesNotMatch(first.prompt, /Bu çalışma SALT OKUNUR/);
 });

@@ -181,7 +181,7 @@ async function leadTurn(ctx, prompt) {
     if (!resumable || err.sawOutput || err.name === 'AbortError' || !mayBeStaleSession(err)) throw err;
     ctx.note('Yöneticinin önceki oturumu sürdürülemedi; yeni oturum başlatılıyor.', 'warn');
     ctx.lane('lead').sessionId = undefined;
-    const recap = P.leadRecap({ goal: ctx.state.goal, workers: teamView(ctx, workerList(ctx)), log: ctx.state.log, budget: ctx.config.budget });
+    const recap = P.leadRecap({ goal: ctx.state.goal, workers: teamView(ctx, workerList(ctx)), log: ctx.state.log, budget: ctx.config.budget, permission: ctx.config.permission });
     return work(ctx, 'lead', { prompt: `${recap}${prompt}`, permission: 'read-only', system: P.leadSystem, resume: false });
   }
 }
@@ -512,7 +512,7 @@ async function drive(ctx, firstPrompt, phaseTitle) {
           round: rounds, maxRounds, reports, running: runningNow, waiting: waitingNow,
           // per-file view sized for the lead's model (binary/lockfiles summarized, cut files named)
           diff: d ? reviewDiff(d.diff, Math.floor(promptBudget(ctx.adapterOf('lead')) * 0.6)) : null,
-          warnings: warns, goal: st.goal, resumed: ctx.canResume('lead'),
+          warnings: warns, goal: st.goal, resumed: ctx.canResume('lead'), permission: ctx.config.permission,
         })),
       };
     })().catch((error) => ({ kind: 'lead', error }));
@@ -584,7 +584,7 @@ export default {
     const workers = teamView(ctx, workerList(ctx));
     if (ctx.config.autoTeam) ctx.note(teamNote(workers, ctx.config.budget));
     await drive(ctx, P.leadStart({
-      goal: st.goal, workers, readOnly: ctx.config.permission === 'read-only', maxSteps: ctx.config.steps, budget: ctx.config.budget,
+      goal: st.goal, workers, readOnly: ctx.config.permission === 'read-only', maxSteps: ctx.config.steps, budget: ctx.config.budget, permission: ctx.config.permission,
     }), 'Planlama');
     return 'waiting';
   },
@@ -618,12 +618,12 @@ export default {
     const open = st.open || [];
     if (st.interrupted || unseen.length || open.length) {
       await drive(ctx, P.leadResume({
-        text, interrupted: st.interrupted, unseen, open, log: st.log, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, budget: ctx.config.budget,
+        text, interrupted: st.interrupted, unseen, open, log: st.log, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, budget: ctx.config.budget, permission: ctx.config.permission,
       }), 'Yönetici · kaldığı yerden');
       return 'waiting';
     }
     await drive(ctx, P.leadUser({
-      text, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, log: st.log, budget: ctx.config.budget,
+      text, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, log: st.log, budget: ctx.config.budget, permission: ctx.config.permission,
     }), 'Yönetici · yeni mesaj');
     return 'waiting';
   },

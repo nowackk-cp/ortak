@@ -260,7 +260,7 @@ async function planStage(ctx) {
   const goal = goalOf(ctx);
   const r = await readerTurn(ctx, 'planner', {
     system: P.plannerSystem,
-    build: (_resumed, budget) => P.plan(clip(goal, Math.max(8000, Math.floor(budget * 0.6))), st.notes),
+    build: (_resumed, budget) => P.plan(clip(goal, Math.max(8000, Math.floor(budget * 0.6))), st.notes, ctx.config.permission),
   });
   const { steps, warning } = parsePlan(r.text, goal);
   if (warning) ctx.note(warning, 'warn');
@@ -334,7 +334,7 @@ async function reviewStage(ctx) {
       const build = async (resumed, budget) => {
         const common = {
           goal: clip(goal, Math.max(4000, Math.floor(budget * 0.25))), steps: st.plan, summaries: st.summaries, notes: st.notes,
-          round, request: cyc.request, fix: fix ? { by: fix.by, summary: fix.summary } : null,
+          round, request: cyc.request, fix: fix ? { by: fix.by, summary: fix.summary } : null, permission: ctx.config.permission,
         };
         // A resumed reviewer that wrote the last review sees only what the fix changed.
         if (resumed && fix && last.lane === l.lane) {
