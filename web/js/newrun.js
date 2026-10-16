@@ -561,29 +561,30 @@ function teamPreview(c) {
       ? 'Kullanılabilir ücretsiz ajan yok. Ajanlar ve API\'ler penceresinden Groq, OpenRouter ya da Gemini gibi ücretsiz bir ajan bağlayın.'
       : 'Kullanılabilir alt ajan yok.');
   }
-  const chips = h('div', { class: 'team-prev' }, t.workers.map((w) => h('span', {
+  const chips = h('div', { class: 'team-grid' }, t.workers.map((w) => h('div', {
     class: `team-chip${w.backup ? ' backup' : ''}`,
     title: `${w.name} · ${w.modelLabel}${w.backup ? '\nYedek: yalnızca ücretsiz ajanlar başaramazsa kullanılır' : ''}`,
   },
   h('span', { class: `agent-av sm spk-${w.agentId}`, 'aria-hidden': 'true', text: w.name.charAt(0).toLocaleUpperCase('tr') }),
   h('span', { class: 'tc-name' }, h('b', { text: w.name.replace(/\s*\(.*\)$/, '') }), ' ', shortModel(w.agentId, w.model)),
-  tierBadge(w.tier),
-  w.backup && h('span', { class: 'tc-backup', text: 'yedek' }))));
-  if (!t.catalog?.length) return chips;
+  w.backup && h('span', { class: 'tc-backup', text: 'yedek' }),
+  tierBadge(w.tier))));
+  const panel = h('div', { class: 'team-panel' }, h('div', { class: 'tp-label', text: 'Başlangıç ekibi' }), chips);
+  if (!t.catalog?.length) return panel;
   // every model the lead may add, per app / API (the chips are only the starting team)
   const team = new Set(t.workers.map((w) => `${w.agentId}:${w.model}`));
   const providers = t.catalog.map((p) => ({ ...p, models: p.models.map((m) => (team.has(m.ref) ? { ...m, team: true } : m)) }));
   const { total, el } = catalogView(providers);
   const key = 'lead.catalogOpen';
-  const box = h('details', { class: 'catalog-card in-setup', open: !!store.get(key, false) },
+  const box = h('details', { class: 'tp-all', open: !!store.get(key, false) },
     h('summary', {}, icon('chevron', 'prov-chev'),
-      h('b', { text: `Yönetici ${total} model arasından seçer` }),
-      h('span', { class: 'cc-sub', text: providers.map((p) => `${p.name} ${p.models.length}`).join(' · ') })),
-    h('div', { class: 'cc-body' },
-      h('p', { class: 'cc-hint', text: 'Yukarıdakiler başlangıç ekibi. Yönetici her görev için bu listeden işe en uygun modeli seçer; gerekirse aynı modelden birkaç kopya açılır.' }),
-      el));
+      h('span', { class: 'tp-all-t', text: `Yönetici ${total} model arasından seçer` }),
+      h('span', { class: 'tp-all-n', text: `${providers.length} uygulama / API` })),
+    h('p', { class: 'cc-hint', text: 'Her görev için modeli yönetici seçer; aynı model meşgulse yeni bir kopyası açılır.' }),
+    el);
   box.addEventListener('toggle', () => store.set(key, box.open));
-  return h('div', {}, chips, box);
+  panel.append(box);
+  return panel;
 }
 
 function leadSetup(card, c) {
@@ -610,9 +611,9 @@ function leadSetup(card, c) {
     field('Yönetici', single(c, 'lead', false, 'Yönetici'), 'Planlar, işi dağıtır ve denetler; kendisi kod yazmaz. Güçlü bir model seçin (ör. Opus).'),
     field('Ekip', team),
     advanced(
-      field('En fazla denetim', seg(nums([3, 5, 8, 12]), () => c.steps, (n) => { c.steps = n; save(); }, 'En fazla denetim'), 'Yönetici işler bitince (bir iş başarısız olursa hemen) sonuçları denetler ve gerekirse yeni görev verir.'),
-      field('Aynı anda görev', seg(nums([1, 3, 5, 8]), () => c.parallel, (n) => { c.parallel = n; save(); }, 'Aynı anda görev'), 'Bağımsız görevler aynı anda bu kadar modelde çalışır. Yönetici her görev için modeli katalogdan seçer; aynı model meşgulse yeni bir kopyası açılır.'),
-      field('Görev süre sınırı', seg([5, 10, 20, 30, 0].map((n) => ({ id: n, label: n ? `${n} dk` : 'Yok' })), () => c.taskMinutes, (n) => { c.taskMinutes = n; save(); }, 'Görev süre sınırı'), 'Bu sürede bitmeyen görev durdurulur ve başka bir modele verilir (Junie gibi yavaş ajanlar işi tıkamasın).'),
+      field('En fazla denetim', seg(nums([3, 5, 8, 12]), () => c.steps, (n) => { c.steps = n; save(); }, 'En fazla denetim'), 'İşler bitince yönetici sonuçları denetler, gerekirse yeni görev verir.'),
+      field('Aynı anda görev', seg(nums([1, 3, 5, 8]), () => c.parallel, (n) => { c.parallel = n; save(); }, 'Aynı anda görev'), 'Bağımsız görevler aynı anda bu kadar modelde çalışır.'),
+      field('Görev süre sınırı', seg([5, 10, 20, 30, 0].map((n) => ({ id: n, label: n ? `${n} dk` : 'Yok' })), () => c.taskMinutes, (n) => { c.taskMinutes = n; save(); }, 'Görev süre sınırı'), 'Bitmeyen görev durdurulur ve başka bir modele verilir.'),
       field('Yetki', permissionControl(c, ['read-only', 'edit', 'full']))));
 }
 

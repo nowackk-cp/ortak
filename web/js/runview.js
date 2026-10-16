@@ -333,6 +333,8 @@ class Block {
     if (type !== 'done' && type !== 'error' && type !== 'usage') {
       if (!s.start) s.start = ts || Date.now();
       if (!s.err) this.setState('running', ts);
+      // "Düşünüyor…" / "Sırada…" only until the agent shows what it does
+      if (type !== 'status' && this.statusText) this.setStatusText('');
     }
     switch (type) {
       case 'text-delta': {
@@ -575,7 +577,7 @@ export class RunView {
       this.promptSeen = true;
     }
     this.emptyEl = h('div', { class: 'empty small run-wait' }, spinner(), 'Ajanlar hazırlanıyor…');
-    this.el.append(this.lanesBar, task, this.sectionsEl, this.emptyEl);
+    this.el.append(...[this.lanesBar, task, this.sectionsEl, this.emptyEl].filter(Boolean));
   }
 
   // -- lanes -----------------------------------------------------------------------------------
@@ -662,8 +664,7 @@ export class RunView {
     avatarEl(this.laneLabel(info), info.agentId, info.state === 'running'),
     h('span', { class: 'lc-name', text: this.laneLabel(info) }),
     h('span', { class: 'lc-model', text: shortModel(info) }),
-    info.role && info.role !== 'worker' && h('span', { class: 'lc-role', text: roleLabel(info.role) }),
-    tierBadge(laneTier(info))));
+    info.role && info.role !== 'worker' && h('span', { class: 'lc-role', text: roleLabel(info.role) })));
     const busy = this.status === 'running' ? [...this.lanes.values()].filter((i) => i.state === 'running').length : 0;
     this.lanesBar.replaceChildren(...(busy ? [h('span', { class: 'lanes-sum', title: 'Şu an çalışan ajanlar' }, spinner('sm'), `${busy} çalışıyor`)] : []), ...chips);
     this.lanesBar.hidden = !chips.length;
@@ -732,6 +733,10 @@ export class RunView {
   }
 
   laneBlock(lane) {
+    // lead: a worker's events stay in the card of its current task, whatever phase or message
+    // came in between (one task = one card)
+    const active = this.taskLane?.get(lane);
+    if (active) return active.block;
     // a follow-up without its own phase continues in a fresh section below the user message
     if (this.needSection) this.newSection(null);
     const sec = this.curSection();
@@ -799,7 +804,7 @@ export class RunView {
       col.clock = live ? h('span', { class: 'lh-clock' }) : null;
       fill(col.head,
         icon('chevron', 'lh-chev'),
-        avatarEl(this.laneLabel(info), info.agentId, live),
+        avatarEl(this.laneLabel(info), info.agentId, false),
         h('span', { class: 'lh-name', text: this.laneLabel(info) }),
         h('span', { class: 'lh-model', text: shortModel(info) }),
         info.role && info.role !== 'worker' && h('span', { class: 'lh-role', text: roleLabel(info.role) }),
@@ -873,8 +878,12 @@ export class RunView {
   /** The folded card's one-line preview: what the agent is doing now, or its summary. */
   paintPreview(col) {
     if (!col.prev) return;
-    const running = col.block.state === 'running' && this.status === 'running';
-    const text = (running && col.block.statusText) || col.block.preview || (running ? 'Çalışıyor…' : '');
+    const b = col.block;
+    const running = b.state === 'running' && this.status === 'running';
+    const streaming = running && [...b.lanes.values()].find((s) => s.cur?.text)?.cur;
+    let text = (running && b.statusText) || (streaming && previewOf(streaming.transform ? streaming.transform(streaming.text) : streaming.text)) || b.preview || (running ? 'Çalışıyor…' : '');
+    if (running && col.stalled) text = `${clockText(Date.now() - Math.max(b.lastAt, b.startedAt))} süredir yeni çıktı yok${text ? ` · son: ${text}` : ''}`;
+    col.prev.classList.toggle('quiet', running && !!col.stalled);
     if (col.prev.textContent !== text) col.prev.textContent = text;
   }
 
@@ -949,10 +958,17 @@ export class RunView {
     this.promptSeen = true;
     const files = Array.isArray(ev.files) ? ev.files : [];
     if (first && (this.prompt || this.promptFiles.length || this.promptImages.length) && text.trim() === this.prompt.trim()) return; // already shown from config
-    for (const b of this.allBlocks()) b.boundary();
-    for (const info of this.lanes.values()) info.err = false;
     this.stick = true;
     this.lastSpeaker = null;
+    // a message to one worker: its answer is not part of the worker's last task
+    if (ev.lane != null) this.taskLane?.delete(String(ev.lane));
+    if (ev.live && !this.single) {
+      // written while the agents work: they carry on in their cards (the lead answers in a phase of its own)
+      this.place(this.userBubble(ev, 'live'));
+      return;
+    }
+    for (const b of this.allBlocks()) b.boundary();
+    for (const info of this.lanes.values()) info.err = false;
     this.place(this.userBubble(ev, ev.live ? 'live' : null));
     if (!this.single && this.sections.some((sec) => sec.grid)) this.needSection = true;
   }
@@ -972,7 +988,9 @@ export class RunView {
     const lane = String(ev.lane);
     const key = `${lane}\u0001${ev.id}`;
     this.taskCols ||= new Map();
+    this.taskLane ||= new Map(); // lane -> the card of its current task
     if (ev.state === 'running') {
+      this.taskLane.delete(lane);
       if (this.needSection) this.newSection(null);
       const sec = this.curSection();
       const old = sec.cols.get(lane);
@@ -986,6 +1004,7 @@ export class RunView {
       col.block.setState('running', ev.ts);
       col.block.lastAt = ev.ts || Date.now();
       this.taskCols.set(key, col);
+      this.taskLane.set(lane, col);
       this.renderColHead(col);
       return;
     }
@@ -1255,7 +1274,14 @@ export class RunView {
 
   onTick() {
     if (this.single) { this.updateStatusLine(); return; }
-    for (const sec of this.sections) for (const col of sec.cards) if (col.clock && this.paintClock(col)) this.paintFoot(col);
+    for (const sec of this.sections) {
+      for (const col of sec.cards) {
+        if (!col.clock) continue;
+        const changed = this.paintClock(col);
+        if (changed) this.paintFoot(col);
+        if (changed || col.stalled) this.paintPreview(col);
+      }
+    }
   }
 
   updateStatusLine() {

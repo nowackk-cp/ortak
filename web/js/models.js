@@ -20,7 +20,7 @@ function statsText(s) {
 
 const tag = (text, cls = '', title = '') => h('span', { class: `mdl-tag${cls ? ' ' + cls : ''}`, text, title: title || null });
 
-function modelRow(m, { showRef }) {
+function modelRow(m, { showTier }) {
   const past = statsText(m.stats);
   return h('div', {
     class: `mdl${m.disabled ? ' off' : ''}`,
@@ -28,15 +28,17 @@ function modelRow(m, { showRef }) {
     title: m.ref || m.id,
   },
   h('span', { class: 'mdl-name', text: m.label || m.id }),
-  showRef && h('code', { class: 'mdl-ref', text: m.ref || m.id }),
   (m.default || m.isDefault) && tag('varsayılan'),
   m.team && tag('ekipte', 'team', 'Başlangıç ekibinde'),
   m.backup && tag('yedek', 'backup', 'Yalnızca ücretsiz modeller yetmezse kullanılır'),
   m.tools === false && tag('araçsız', '', 'Gerçek araç çağırmayı desteklemiyor: Ortak onunla yazı protokolüyle çalışır (daha yavaş)'),
   past && h('span', { class: 'mdl-stats', text: past, title: 'Bu modelin son görevleri' }),
   m.note && h('span', { class: 'mdl-note', text: m.note }),
-  tierBadge(m.tier));
+  showTier && tierBadge(m.tier));
 }
+
+/** Cost badges on the rows only when a list mixes tiers (else the header's badge says it). */
+const mixed = (models) => new Set(models.map((m) => m.tier)).size > 1;
 
 /** Rows grouped under the models' `group` (when they have one). */
 function rows(models, opts) {
@@ -74,7 +76,7 @@ export function agentModels(agent) {
   if (!models.length && !agent.modelsNote) return null;
   const usable = models.filter((m) => !m.disabled).length;
   const free = models.filter((m) => !m.disabled && m.tier === 'free').length;
-  const list = h('div', { class: 'mdl-list' }, rows(models, { showRef: false }));
+  const list = h('div', { class: 'mdl-list' }, rows(models, { showTier: mixed(models) }));
   return h('details', { class: 'agent-models' },
     h('summary', {}, icon('chevron', 'am-chev'),
       h('span', { text: `Modeller (${usable})` }),
@@ -92,17 +94,16 @@ export function catalogView(providers, { open = false } = {}) {
   const total = providers.reduce((n, p) => n + p.models.length, 0);
   const body = h('div', { class: 'prov-list' }, providers.map((p) => {
     const tiers = new Set(p.models.map((m) => m.tier));
-    return h('details', { class: 'prov', open: open || p.models.length <= 3 },
-      h('summary', {},
+    const how = p.own ? 'Dosyaları kendi araçlarıyla düzenler, komut çalıştırır.' : 'Ortak onun yerine dosya okur, düzenler, komut çalıştırır.';
+    return h('details', { class: 'prov', open: open || p.models.length <= 1 },
+      h('summary', { title: `${how}\nAynı anda en fazla ${p.copies} kopya.` },
         icon('chevron', 'prov-chev'),
         h('span', { class: `agent-av sm spk-${p.agentId}`, 'aria-hidden': 'true', text: (p.name || p.agentId).charAt(0).toLocaleUpperCase('tr') }),
         h('b', { class: 'prov-name', text: p.name || p.agentId }),
         h('span', { class: 'prov-n', text: `${p.models.length} model` }),
-        tierBadge(tiers),
-        tag(p.own ? 'kendi araçları' : 'Ortak eli', '', p.own ? 'Dosyaları kendi araçlarıyla düzenler, komut çalıştırır' : 'Ortak onun yerine dosya okur, düzenler, komut çalıştırır'),
-        tag(`aynı anda ${p.copies}`, '', 'Aynı anda açılabilecek kopya sayısı'),
-        p.slow && tag('yavaş', 'slow', 'Küçük bir görev bile dakikalar sürebilir')),
-      h('div', { class: 'mdl-list' }, rows(p.models, { showRef: true })));
+        p.slow && tag('yavaş', 'slow', 'Küçük bir görev bile dakikalar sürebilir'),
+        tierBadge(tiers)),
+      h('div', { class: 'mdl-list' }, rows(p.models, { showTier: mixed(p.models) })));
   }));
   return { total, el: h('div', { class: 'catalog-view' }, filterBox(body, total), body) };
 }
@@ -112,16 +113,15 @@ export function catalogCard(ev) {
   const providers = Array.isArray(ev.providers) ? ev.providers : [];
   const { total, el } = catalogView(providers);
   const bits = [
-    providers.map((p) => `${p.name} ${p.models.length}`).join(' · '),
+    `${providers.length} uygulama / API`,
     ev.parallel && `aynı anda ${ev.parallel} görev`,
-    ev.taskMinutes ? `görev başına en fazla ${ev.taskMinutes} dk` : null,
+    ev.taskMinutes ? `görev başına ${ev.taskMinutes} dk` : null,
   ].filter(Boolean);
   return h('details', { class: 'catalog-card' },
     h('summary', {},
       icon('chevron', 'prov-chev'),
-      icon('sparkle'),
-      h('b', { text: `Yönetici ${total} model görüyor` }),
-      h('span', { class: 'cc-sub', text: bits.join(' — ') })),
+      h('b', { text: `Yönetici ${total} model arasından seçer` }),
+      h('span', { class: 'cc-sub', text: bits.join(' · ') })),
     h('div', { class: 'cc-body' },
       h('p', { class: 'cc-hint', text: 'Her görev için modeli yönetici seçer; “ekipte” olanlar başlangıç ekibi. Aynı model meşgulse yeni bir kopyası açılır.' }),
       el));

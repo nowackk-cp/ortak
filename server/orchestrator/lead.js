@@ -435,6 +435,7 @@ async function drive(ctx, makePrompt, phaseTitle) {
   let warnings = [];
   let rounds = 0;
   let batches = 0;
+  let announce = [];         // tasks of the last decision: the ones that can't start yet get a note
   let leadP = null;          // a lead review in flight (runs while tasks keep going)
   let decision = null;
   let fatal = null;
@@ -625,12 +626,18 @@ async function drive(ctx, makePrompt, phaseTitle) {
     }
     if (!added.length) return;
     ctx.phase('uygulama', `Uygulama ${++batches}`);
-    ctx.note(`**Görevler** — bağımsız olanlar aynı anda çalışır (en fazla ${parallel})\n` + added.map((id) => {
-      const x = tasks.get(id);
-      const when = x.after.length ? `${x.after.join(', ')} bitince` : 'hemen';
-      return `- **${id} · ${keyOf(x.target)}** _(${when})_: ${line(x.task, 260)}`;
-    }).join('\n'));
+    announce.push(...added);
     persist();
+  };
+
+  // a started task shows as a card of its own; the ones that wait are listed once, with why
+  const queuedNote = (ids) => {
+    const waiting = ids.map((id) => tasks.get(id)).filter((x) => x?.status === 'waiting');
+    if (!waiting.length) return;
+    ctx.note(`**Sırada** (aynı anda en fazla ${parallel} görev)\n` + waiting.map((x) => {
+      const deps = x.after.filter((id) => tasks.get(id)?.status !== 'done');
+      return `- **${x.id} · ${keyOf(x.target)}** _(${deps.length ? `${deps.join(', ')} bitince` : 'sıra gelince'})_: ${line(x.task, 200)}`;
+    }).join('\n'));
   };
 
   const start = (x, w) => {
@@ -714,6 +721,7 @@ async function drive(ctx, makePrompt, phaseTitle) {
     persist();
     for (;;) {
       if (!fatal) startReady();
+      if (announce.length) queuedNote(announce.splice(0));
       if (!leadP && !fatal) {
         if (inbox.length) {
           // the user's message gets a turn of its own (and the lead one more round after it)
