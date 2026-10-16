@@ -47,6 +47,25 @@ export async function makeContext(store, run, signal) {
     lane: (id) => meta.lanes.find((l) => l.lane === id),
     lanes: (role) => meta.lanes.filter((l) => !role || l.role === role),
     adapterOf: (laneId) => adapters.get(ctx.lane(laneId)?.agentId) || null,
+    /** Loads the adapters of `agentIds` so lanes on them can be added without waiting. */
+    async ensureAdapters(agentIds) {
+      for (const id of agentIds) if (!adapters.has(id)) adapters.set(id, await findAdapter(id));
+    },
+    /**
+     * Adds a lane while the run goes on (lead mode: another copy of a model, a model the lead picked
+     * from the catalog). Its adapter must be loaded (ensureAdapters). Resolves the lane.
+     * `spec` = { agentId, model, role, title, tier }; the id is `agentId`, `agentId#2`, …
+     */
+    addLane(spec) {
+      if (!adapters.get(spec.agentId)) throw new Error(`Ajan yüklenmedi: ${spec.agentId}`);
+      let lane = spec.agentId;
+      for (let n = 2; meta.lanes.some((l) => l.lane === lane); n++) lane = `${spec.agentId}#${n}`;
+      const l = { lane, agentId: spec.agentId, model: spec.model ?? null, role: spec.role || 'worker', title: spec.title || spec.agentId, ...(spec.tier ? { tier: spec.tier } : {}) };
+      meta.lanes.push(l);
+      store.append(run, { kind: 'lane', lane, agentId: l.agentId, model: l.model, role: l.role, title: l.title, tier: l.tier });
+      store.saveMeta(run, true);
+      return l;
+    },
     canResume(laneId) {
       const l = ctx.lane(laneId);
       return !!(l?.sessionId && adapters.get(l.agentId)?.capabilities?.resume);

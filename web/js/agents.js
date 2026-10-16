@@ -15,6 +15,7 @@ export const getAgent = (id) => catalog.byId.get(id);
 // Claude / ChatGPT / Copilot plan limits, paid = pay per token.
 export const TIER = {
   free: { label: 'Ücretsiz', title: 'Ücretsiz: para ya da abonelik limiti harcamaz' },
+  credit: { label: 'Kredi', title: 'EVREN kredi bakiyesinden harcar' },
   subscription: { label: 'Abonelik', title: 'Aboneliğinizin (Claude, ChatGPT, Copilot…) limitinden harcar' },
   paid: { label: 'Ücretli', title: 'Token başına ücretlendirilir' },
 };
@@ -36,7 +37,7 @@ export function modelTier(agentId, modelId) {
 export function tierBadge(t) {
   const set = t instanceof Set ? t : new Set(t ? [t] : []);
   if (!set.size) return null;
-  const order = ['free', 'subscription', 'paid'].filter((x) => set.has(x));
+  const order = ['free', 'credit', 'subscription', 'paid'].filter((x) => set.has(x));
   const main = order[0];
   const text = order.length > 1 && main === 'free' ? `${TIER.free.label} modeller` : TIER[main].label;
   return h('span', { class: `tier tier-${main}`, title: order.map((x) => TIER[x].title).join('\n'), text });

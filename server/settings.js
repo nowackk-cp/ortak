@@ -9,7 +9,7 @@ const DATA = path.resolve(process.env.ORTAK_DATA || path.join(ROOT, 'data'));
 const FILE = path.join(DATA, 'settings.json');
 
 export const DEFAULTS = Object.freeze({
-  maxConcurrent: 2,           // agent turns that start a local CLI process (Claude, Codex) at once; 0 = no limit
+  maxConcurrent: 5,           // agent turns that start a local CLI process (Claude, Codex, Copilot…) at once; 0 = no limit
   lowPriority: true,          // run agent processes / bridge windows at below-normal CPU priority
   geminiIdleMinutes: 10,      // close Ortak's Gemini window after this long without a turn; 0 = keep open
   antigravityAutoStart: true, // open Antigravity on demand when a turn needs it

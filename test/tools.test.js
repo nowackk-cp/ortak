@@ -12,7 +12,7 @@ import { projectContext, projectInstructions } from '../server/tools/project.js'
 import { gitDiff, gitLog, gitShow, gitStatus } from '../server/tools/gittools.js';
 import { isPrivateAddress, checkUrl, htmlToText, parseDuckDuckGo } from '../server/tools/web.js';
 import { toolCaps } from '../server/tools/budget.js';
-import { compactMessages } from '../server/adapters/openai-chat.js';
+import { chatTurn, compactMessages, tooLarge } from '../server/adapters/openai-chat.js';
 import * as checkpoints from '../server/checkpoints.js';
 
 // ---- edit ------------------------------------------------------------------------------------
@@ -218,4 +218,36 @@ test('compactMessages: eski araç çıktıları kısalır, geçmiş düşer, ça
   assert.equal(messages[5].content.length, 6000, 'son araç çıktısı olduğu gibi');
   assert.deepEqual(messages.map((m) => m.role), ['system', 'user', 'assistant', 'tool', 'assistant', 'tool']);
   assert.equal(compactMessages(messages, 100_000, turn), 0);
+});
+
+test('chatTurn: 413 "istek çok büyük" hatasında konuşma kısaltılıp yeniden gönderilir', async () => {
+  const sse = (text) => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  const sizes = [];
+  const request = async (_path, { body }) => {
+    const size = JSON.stringify(body.messages).length;
+    sizes.push(size);
+    if (sizes.length === 1) {
+      const e = new Error(`Request too large for model qwen/qwen3-32b: Limit 7000, Requested ${Math.round(size / 2)}`);
+      e.status = 413;
+      throw e;
+    }
+    return sse('tamam');
+  };
+  const old = Array.from({ length: 30 }, (_, i) => [
+    { role: 'user', content: `soru ${i} ${'x'.repeat(400)}` },
+    { role: 'assistant', content: `cevap ${i} ${'y'.repeat(400)}` },
+  ]).flat();
+  const messages = [{ role: 'system', content: 'sistem' }, ...old, { role: 'user', content: 'son soru' }];
+  const statuses = [];
+  const r = await chatTurn({
+    adapter: 'groq', request, fail: (m) => new Error(m), describe: () => '', label: 'Groq', body: { model: 'q' },
+    messages, signal: undefined, emit: (e) => { if (e.type === 'status') statuses.push(e.text); },
+  });
+  assert.equal(r.text, 'tamam');
+  assert.equal(sizes.length, 2);
+  assert.ok(sizes[1] < sizes[0] * 0.75, `${sizes[1]} < ${sizes[0]}`);
+  assert.ok(statuses.some((t) => /sınırına sığmadı/.test(t)));
+  assert.equal(messages.at(-1).content, 'son soru', 'kullanıcının son mesajı korunur');
+  assert.equal(tooLarge({ status: 413, message: 'Limit 7000, Requested 8194' }).toFixed(2), (7000 / 8194).toFixed(2));
+  assert.equal(tooLarge({ status: 429, message: 'rate limit' }), null);
 });

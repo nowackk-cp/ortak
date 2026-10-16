@@ -781,7 +781,8 @@ function init() {
   $('cwd-browse').append(icon('folder'));
   $('agents-legend').replaceChildren(
     h('span', {}, h('span', { class: 'tier tier-free', text: 'Ücretsiz' }), 'para ya da abonelik limiti harcamaz'),
-    h('span', {}, h('span', { class: 'tier tier-subscription', text: 'Abonelik' }), 'Claude / ChatGPT / Copilot limitinden harcar'),
+    h('span', {}, h('span', { class: 'tier tier-credit', text: 'Kredi' }), 'EVREN kredi bakiyesinden harcar'),
+    h('span', {}, h('span', { class: 'tier tier-subscription', text: 'Abonelik' }), 'Claude / ChatGPT limitinden harcar'),
     h('span', {}, h('span', { class: 'tier tier-paid', text: 'Ücretli' }), 'token başına ücret'));
   renderThemeBtn();
   applySurface(state.surface);

@@ -31,12 +31,12 @@ test('yönetici bütçe kurallarını ve ajanların ücret sınıfını görür;
   assert.match(first, /KENDİ LİMİTİNİ KORU/);
   assert.match(first, /Bu çalışmanın yetkisi: DÜZENLEME — alt ajanlar proje klasöründe dosya yazar/);
   assert.match(callsOf(ctx, 'lead')[0].system, /BİLEREK salt okunur açılır/);
-  assert.ok(notes(ctx).some((t) => /t1: @qwen limiti doldu; görev @argon ajanına devredildi/.test(t)), notes(ctx).join('\n'));
+  assert.ok(notes(ctx).some((t) => /t1: groq:qwen limiti doldu; görev gemini:argon-high modeline devredildi/.test(t)), notes(ctx).join('\n'));
   assert.ok(notes(ctx).some((t) => /Ekip \(otomatik · ücretsiz öncelikli\)/.test(t)));
   assert.equal(callsOf(ctx, 'claude').length, 0, 'abonelikli yedek kullanılmadı');
-  assert.deepEqual(ctx.state.exhausted, ['groq']);
+  assert.deepEqual(ctx.state.exhausted, ['groq:qwen']);
   const review = callsOf(ctx, 'lead')[1].prompt;
-  assert.match(review, /@qwen limitine ulaştı/);
+  assert.match(review, /groq:qwen limitine ulaştı/);
   const result = ctx.events.find((e) => e.kind === 'result').text;
   assert.match(result, /\*\*Maliyet:\*\* ücretsiz ajanlar 1 görev · yönetici 2 tur/);
 });
@@ -45,7 +45,7 @@ test('limiti dolan ajana sonradan verilen görev başka ajana yönlendirilir', a
   const cwd = await makeRepo();
   const ctx = fakeCtx({
     cwd, lanes: LANES, agents: AGENTS, config: { mode: 'lead', budget: 'free-first', steps: 4 },
-    state: { exhausted: ['groq'] },
+    state: { exhausted: ['groq:qwen'] },
     script: async (lane, opts, call) => {
       if (lane === 'lead') return call.n === 1 ? TASK : DONE;
       return 'ÖZET: tamam';
@@ -54,7 +54,7 @@ test('limiti dolan ajana sonradan verilen görev başka ajana yönlendirilir', a
   await lead.start(ctx);
   assert.equal(callsOf(ctx, 'groq').length, 0);
   assert.equal(callsOf(ctx, 'gemini').length, 1);
-  assert.ok(notes(ctx).some((t) => /@qwen limitine ulaşmıştı; görev @argon ajanına verildi/.test(t)));
+  assert.ok(notes(ctx).some((t) => /groq:qwen limitine ulaşmıştı; görev gemini:argon-high modeline verildi/.test(t)));
 });
 
 test('tam yetkili çalışmada yönetici her mesajda ekibin yazabildiğini öğrenir (oturum sürse de)', async () => {
@@ -70,4 +70,61 @@ test('tam yetkili çalışmada yönetici her mesajda ekibin yazabildiğini öğr
   assert.equal(second.resumed, true);
   assert.match(second.prompt, /^Bu çalışmanın yetkisi: TAM YETKİ/);
   assert.doesNotMatch(first.prompt, /Bu çalışma SALT OKUNUR/);
+});
+
+test('yönetici katalogdan model seçer: meşgul modelin yeni kopyası açılır, aynı anda en fazla N görev, tek kopyalı ajan model değiştirir', async () => {
+  const cwd = await makeRepo();
+  const agents = { claude: editAgent('claude'), openrouter: textAgent('openrouter'), gemini: textAgent('gemini') };
+  const lanes = [
+    { lane: 'lead', agentId: 'claude', model: 'opus', role: 'lead', title: 'Claude Code · Opus 5.5', tier: 'subscription' },
+    { lane: 'gemini', agentId: 'gemini', model: 'argon-high', role: 'worker', title: 'Gemini (web) · 4 Argon', tier: 'free' },
+  ];
+  const plan = '```json\n{"tasks":[' +
+    '{"id":"a","agent":"openrouter:qwen/qwen3-coder:free","task":"a.js yaz"},' +
+    '{"id":"b","agent":"openrouter:qwen/qwen3-coder","task":"b.js yaz"},' +
+    '{"id":"c","agent":"openrouter:qwen/qwen3-coder:free","task":"c.js yaz"},' +
+    '{"id":"d","agent":"argon","task":"d.js yaz"},' +
+    '{"id":"e","agent":"gemini:pro","task":"hepsini gözden geçir","after":["d"]}' +
+    '],"done":false}\n```';
+  let active = 0;
+  let peak = 0;
+  const ctx = fakeCtx({
+    cwd, lanes, agents, config: { mode: 'lead', budget: 'free-first', steps: 4, parallel: 3 },
+    script: async (lane, opts, call) => {
+      if (lane === 'lead') return call.n === 1 ? plan : DONE;
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 25));
+      active--;
+      return 'ÖZET: tamam';
+    },
+  });
+  ctx.catalogSource = async () => [
+    { agentId: 'openrouter', name: 'OpenRouter', own: false, copies: 4, models: [{ id: 'qwen/qwen3-coder:free', ref: 'openrouter:qwen/qwen3-coder:free', label: 'Qwen3 Coder', tier: 'free' }] },
+    { agentId: 'gemini', name: 'Gemini (web)', own: false, copies: 1, models: [
+      { id: 'argon-high', ref: 'gemini:argon-high', label: '4 Argon', tier: 'free' },
+      { id: 'pro', ref: 'gemini:pro', label: 'Pro', tier: 'free' },
+    ] },
+  ];
+  await lead.start(ctx);
+  const first = callsOf(ctx, 'lead')[0].prompt;
+  assert.match(first, /Model kataloğu/);
+  assert.match(first, /openrouter:qwen\/qwen3-coder:free/);
+  assert.match(first, /aynı anda en fazla 3 görev/);
+  assert.equal(peak, 3, 'paralel sınır');
+  const orLanes = ctx.lanes('worker').filter((l) => l.agentId === 'openrouter').map((l) => l.lane);
+  assert.deepEqual(orLanes, ['openrouter', 'openrouter#2', 'openrouter#3']);
+  assert.ok(ctx.lanes('worker').every((l) => l.agentId !== 'openrouter' || l.model === 'qwen/qwen3-coder:free'));
+  for (const l of orLanes) assert.equal(callsOf(ctx, l).length, 1);
+  assert.equal(ctx.lane('gemini').model, 'pro', 'tek kopyalı Gemini sonraki görev için modelini değiştirdi');
+  assert.equal(callsOf(ctx, 'gemini').length, 2);
+  assert.ok(notes(ctx).some((t) => /ekibe katıldı/.test(t)));
+  assert.ok(notes(ctx).some((t) => /@pro: Gemini · 4 Argon yerine Gemini · Pro ile çalışacak/.test(t)), notes(ctx).join('\n'));
+  assert.ok(notes(ctx).some((t) => /@qwen3-coder-2 ekibe katıldı/.test(t)) && notes(ctx).some((t) => /@qwen3-coder-3 ekibe katıldı/.test(t)));
+  assert.ok(notes(ctx).some((t) => /Yönetici 3 model görüyor; .* aynı anda en fazla 3 görev/.test(t)));
+  const result = ctx.events.find((e) => e.kind === 'result').text;
+  assert.match(result, /ücretsiz ajanlar 5 görev/);
+  const tasks = ctx.events.filter((e) => e.kind === 'task');
+  assert.equal(tasks.filter((e) => e.state === 'running').length, 5);
+  assert.equal(tasks.filter((e) => e.state === 'done').length, 5);
 });

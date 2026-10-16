@@ -22,6 +22,9 @@ function roleReply(prompt, system) {
     const handles = [...new Set([...prompt.matchAll(/^- @([\w.-]+) —/gm)].map((m) => m[1]))].slice(0, 3);
     if (!handles.length) return null;
     const tasks = handles.map((hd, i) => ({ id: `t${i + 1}`, agent: hd, task: `Parça ${i + 1}: ilgili dosyaları incele ve gerekeni yap.` }));
+    // two more on a catalog model ("mock:hizli"): Ortak opens extra copies of it to run them in parallel
+    const ref = /\b(mock:[\w.-]+)/.exec(prompt.split('Model kataloğu')[1] || '')?.[1];
+    if (ref) for (const n of [1, 2]) tasks.push({ id: `k${n}`, agent: ref, task: `Ek parça ${n}: katalogdan seçilen modelle yap.` });
     if (handles.length > 1) tasks.push({ id: `t${handles.length + 1}`, agent: handles[0], task: 'Diğer parçaları birleştir ve test et.', after: tasks.map((t) => t.id) });
     return `İşi ${tasks.length} göreve böldüm.\n\n\`\`\`json\n${JSON.stringify({ tasks, done: false })}\n\`\`\``;
   }

@@ -14,7 +14,9 @@ const SAVED_TOOL_OUTPUT_MAX = 6000; // tool results kept in a saved session (old
 // Characters of conversation (system + history + this turn's tool calls and results) sent per
 // request. A tool loop resends everything on every step, so without a cap a few file reads push a
 // free-tier model past its window or per-minute token limit (Groq: ~8000 tokens/minute).
-const CONTEXT_CHARS = { groq: 22_000, openrouter: 90_000, evren: 120_000 };
+// Turkish text and code run at ~3 characters per token, and the tool definitions count too.
+const CONTEXT_CHARS = { groq: 16_000, openrouter: 90_000, evren: 120_000 };
+const SHRINK_RETRIES = 3;           // "request too large" answered by compacting harder
 const DEFAULT_CONTEXT_CHARS = 90_000;
 const OLD_TOOL_KEEP = 400;          // chars kept of a compacted tool result
 const COMPACT_NOTE = '[Ortak] Bağlam sınırı nedeniyle bu araç çıktısı kısaltıldı; gerekirse aracı yeniden çağır.';
@@ -77,6 +79,19 @@ const RATE_RETRIES = 4;
 const EMPTY_NUDGES = 2;
 const BUSY_STATUS = new Set([500, 502, 503, 504, 529]);
 const BUSY_WAITS_S = [10, 20, 40];
+
+/**
+ * For a "request too large" error: the share of the request that fits (Limit / Requested, a bit
+ * less), or 0.6 when the provider gives no numbers; null for any other error.
+ */
+export function tooLarge(err) {
+  const m = String(err?.message || '');
+  if (err?.status !== 413 && !/request too large|too large for model|context.?length|maximum context|reduce (the length|your message)/i.test(m)) return null;
+  const lim = /limit\D{0,3}(\d+)/i.exec(m);
+  const req = /requested\D{0,3}(\d+)/i.exec(m);
+  if (lim && req && Number(req[1]) > Number(lim[1])) return Math.max(0.2, Number(lim[1]) / Number(req[1]));
+  return 0.6;
+}
 
 function retryAfter(err) {
   if (err?.status !== 429) return null;
@@ -164,9 +179,12 @@ function parseArgs(raw) {
  */
 export async function chatTurn({ adapter, request, fail, describe, label, body, messages, tools, signal, emit, timeoutMs, maxSteps = MAX_TOOL_STEPS, contextChars }) {
   if (!tools) messages.splice(0, messages.length, ...flattenToolHistory(messages));
-  const limit = contextChars || CONTEXT_CHARS[adapter] || DEFAULT_CONTEXT_CHARS;
+  // The tool definitions travel with every request: what's left is for the conversation.
+  const toolChars = tools ? JSON.stringify(tools.defs).length : 0;
+  let limit = Math.max(4000, (contextChars || CONTEXT_CHARS[adapter] || DEFAULT_CONTEXT_CHARS) - toolChars);
   const turnMsg = messages.findLast((m) => m.role === 'user');
   let compactedNote = false;
+  let shrinks = 0;
   const usage = { inputTokens: 0, outputTokens: 0 };
   let sawUsage = false;
   let malformed = 0;
@@ -196,6 +214,19 @@ export async function chatTurn({ adapter, request, fail, describe, label, body, 
         },
       });
     } catch (err) {
+      // "Request too large … Limit 7000, Requested 8194": compact to fit and send again instead of
+      // failing a turn that may already have done most of its work.
+      const fit = shrinks < SHRINK_RETRIES ? tooLarge(err) : null;
+      if (fit) {
+        shrinks++;
+        // the ratio is of the whole request, tool definitions included
+        const now = messages.reduce((n, m) => n + msgSize(m), 0);
+        limit = Math.max(2000, Math.floor((Math.min(limit, now) + toolChars) * fit * 0.85) - toolChars);
+        compactMessages(messages, limit, turnMsg);
+        emit({ type: 'status', text: `${label}: istek modelin sınırına sığmadı; konuşma kısaltılıp yeniden gönderiliyor.` });
+        step--;
+        continue;
+      }
       const wait = rateWaits < RATE_RETRIES ? retryAfter(err) : null;
       if (wait != null) {
         rateWaits++;

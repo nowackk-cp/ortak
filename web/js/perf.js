@@ -18,8 +18,8 @@ const FIELDS = [
   {
     key: 'maxConcurrent',
     label: 'Aynı anda çalışan ajan',
-    hint: 'Claude Code ve Codex her tur için ayrı bir program başlatır. Beyin fırtınası / paralel modda fazlası sıraya girer.',
-    options: [1, 2, 3, 4, 0].map((v) => [v, v ? String(v) : 'Sınırsız']),
+    hint: 'Claude Code, Codex, Copilot gibi uygulamalar her tur için ayrı bir program başlatır; fazlası sıraya girer. API ajanları (Groq, OpenRouter, EVREN) bu sınıra takılmaz.',
+    options: [1, 2, 3, 4, 5, 6, 8, 0].map((v) => [v, v ? String(v) : 'Sınırsız']),
   },
   {
     key: 'lowPriority',

@@ -270,9 +270,13 @@ turn's system prompt gets `CHAT_SURFACE` (plain conversation, no file/shell tool
 { mode: 'team', cwd, prompt, planner: { agentId, model }, workers: [{ agentId, model }], reviewer: { agentId, model }, fixRounds: 3, permission }
 
 // Yönetici: lane 'lead' (salt okunur) bir görev grafiği verir
-//   {"tasks":[{"id":"t1","agent":"<handle>","task":"…","files":["…"],"after":["t0"]}],"done":false}  |  {"tasks":[],"done":true,"summary":"…"}
-// Bir görev, after'daki görevler bitince ve ajanı boşken başlar (ajan başına aynı anda bir görev);
-// bağımsız görevler paralel. Başarısız görevin after-bağımlıları çalıştırılmaz. Yönetici, hiçbir görev
+//   {"tasks":[{"id":"t1","agent":"<handle | sağlayıcı:model>","task":"…","files":["…"],"after":["t0"]}],"done":false}  |  {"tasks":[],"done":true,"summary":"…"}
+// agent: ekipteki bir handle ya da model kataloğundan (catalog.js buildCatalog: kullanılabilir her ajanın bütçeye uyan
+// modelleri, "openrouter:qwen/qwen3-coder:free") bir ad. Görev bir modele (target) bağlıdır, şeride değil: o modelin boştaki
+// şeridinde başlar; yoksa ctx.addLane ile yeni kopya açılır (catalog.copiesOf: ajan başına kopya sınırı, toplam 16 şerit;
+// tek kopyalı ajanın boştaki şeridi modelini değiştirir, yeni oturumla). Aynı anda en fazla `parallel` görev (1–10, varsayılan 5).
+// Bir görev, after'daki görevler bitince başlar; bağımsız görevler paralel. 'task' olayları: { kind:'task', id, lane,
+// state: running|done|failed|skipped|moved, title }. Başarısız görevin after-bağımlıları çalıştırılmaz. Yönetici, hiçbir görev
 // sürmüyorken ya da bir görev başarısız olunca (diğerleri sürerken) raporlar + son denetimden beri diff ile
 // denetler; yeni görevleri hemen grafiğe eklenir. Handle'lar model adından türetilir (sonnet, haiku,
 // argon, sol, flash…), state.handles'ta
@@ -283,11 +287,11 @@ turn's system prompt gets `CHAT_SURFACE` (plain conversation, no file/shell tool
 // bunlarla 'kaldığı yerden' devam eder. ctx.turn geçici hataları (çıktı yoksa) 20 sn / 60 sn sonra yeniden dener
 // ({type:'status', retry:true} olayı); limit/ağ/giriş hatalarında oturum (sessionId) asla silinmez.
 // budget: 'free-first' (varsayılan) | 'free-only' | 'any' — her ajan/model bir ücret sınıfı taşır (tiers.js: free |
-// subscription | paid; /api/agents modellerinde `tier`). Yönetici ekibi ücret sınıfı ve kota durumuyla görür ve
+// credit | subscription | paid; /api/agents modellerinde `tier`). Yönetici ekibi ücret sınıfı ve kota durumuyla görür ve
 // bütçe kurallarına uyar. workers: 'auto' → ekibi tiers.autoTeam() seçer (GET /api/team/auto önizler).
 // Bir alt ajan limit/oturum/ağ/boyut hatası verirse görev aynı ücret sınıfındaki boştaki başka ajana devredilir
-// (state.exhausted: limiti dolan şeritler; onlara verilen görevler yönlendirilir).
-{ mode: 'lead', cwd, prompt, lead: { agentId, model }, workers: [{ agentId, model }] | 'auto', budget: 'free-first', steps: 8, permission }
+// (state.exhausted: limiti dolan "sağlayıcı:model" adları; onlara verilen görevler yönlendirilir).
+{ mode: 'lead', cwd, prompt, lead: { agentId, model }, workers: [{ agentId, model }] | 'auto', budget: 'free-first', steps: 8, parallel: 5, permission }
 ```
 
 The same agent may appear more than once (e.g. two Claude models); lanes are made unique as

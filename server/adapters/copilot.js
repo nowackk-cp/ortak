@@ -113,16 +113,25 @@ async function detect() {
   return { available: true, version, ...(auth?.login ? { account: auth.login } : {}) };
 }
 
+/** Copilot Free: no premium requests at all (auto then only uses the included models). */
+function freePlan(info) {
+  const p = info?.['account.getQuota']?.quotaSnapshots?.premium_interactions;
+  return !!p && !p.entitlementRequests && !p.isUnlimitedEntitlement;
+}
+
 async function listModels() {
   const auto = { id: 'auto', label: 'Otomatik (Copilot seçer)', default: true, group: 'Copilot' };
   const info = await probe().catch(() => null);
+  // Models with a ×0 premium multiplier are included in every plan (Copilot Free too): they cost
+  // no premium requests — Ortak's "free" tier. On Copilot Free, auto picks among those only.
+  if (freePlan(info)) auto.free = true;
   const list = Array.isArray(info?.['models.list']?.models) ? info['models.list'].models : [];
   const out = [auto];
   for (const m of list) {
     if (!m?.id || !SAFE_ARG.test(m.id)) continue;
     const mult = m.billing?.multiplier;
-    const label = `${m.name || m.id}${typeof mult === 'number' && mult !== 1 ? ` (×${mult})` : ''}`;
-    const item = { id: m.id, label, group: m.vendor || m.capabilities?.family || 'Modeller' };
+    const label = `${m.name || m.id}${mult === 0 ? ' (dahil)' : typeof mult === 'number' && mult !== 1 ? ` (×${mult})` : ''}`;
+    const item = { id: m.id, label, group: m.vendor || m.capabilities?.family || 'Modeller', ...(mult === 0 ? { free: true } : {}) };
     if (m.policy?.state === 'disabled') { item.disabled = true; item.note = 'Hesap ayarlarında kapalı (github.com → Copilot ayarları).'; }
     out.push(item);
   }

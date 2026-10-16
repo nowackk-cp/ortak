@@ -13,11 +13,14 @@ import { jsonCandidates } from './json.js';
 import { stripEdits, textCoderTask, work } from './textcoder.js';
 import { errorKind, mayBeStaleSession } from '../errors.js';
 import { promptBudget, reviewDiff } from './diffview.js';
-import { getLimits } from '../limits.js';
-import { modelTier, TIER_TR } from '../tiers.js';
+import { getAgents, getLimits } from '../limits.js';
+import { modelTier, tierAllowed, TIER_TR } from '../tiers.js';
+import { buildCatalog, copiesOf, findModel, modelRef, parseRef } from '../catalog.js';
 
 const MAX_TASKS_PER_REPLY = 12; // tasks taken from one lead answer
 const MAX_TASKS_TOTAL = 40;     // per lead loop
+export const DEFAULT_PARALLEL = 5; // tasks running at the same time (config.parallel)
+const LANES_MAX = 16;           // worker lanes per run, the lead's extra copies included
 // Lead failures after which the run waits for "devam et" instead of ending in an error.
 const PAUSE_KINDS = new Set(['limit', 'transient', 'auth']);
 const DIFF_EVENT_MAX = 1_500_000;
@@ -61,15 +64,18 @@ function workerList(ctx) {
   const permission = ctx.config.permission;
   const readOnly = permission === 'read-only';
   const saved = new Map((st.handles || []).map((x) => [x.lane, x.handle]));
-  const used = new Set();
+  const used = new Map(); // handle -> "agent:model"
   const out = ctx.lanes('worker').map((l) => {
+    const key = modelRef(l.agentId, l.model);
     let handle = saved.get(l.lane);
     if (!handle) {
+      // another copy of the same model: sonnet-2; the same word on another agent: copilot-sonnet
       const word = modelWord(l);
-      handle = used.has(word) ? `${l.agentId}-${word}` : word;
-      for (let n = 2; used.has(handle); n++) handle = `${word}-${n}`;
+      const base = used.has(word) && used.get(word) !== key ? `${l.agentId}-${word}` : word;
+      handle = base;
+      for (let n = 2; used.has(handle); n++) handle = `${base}-${n}`;
     }
-    used.add(handle);
+    used.set(handle, key);
     const caps = ctx.adapterOf(l.lane)?.capabilities || {};
     const edit = !!caps.edit;
     const tier = l.tier || modelTier(l.agentId, null);
@@ -78,7 +84,7 @@ function workerList(ctx) {
       tier,
       backup: ctx.config.budget === 'free-first' && tier !== 'free',
       quota: st.quota?.[l.agentId] || null,
-      exhausted: (st.exhausted || []).includes(l.lane),
+      exhausted: (st.exhausted || []).includes(l.lane) || (st.exhausted || []).includes(modelRef(l.agentId, l.model)),
       textOnly: !edit,
       canEdit: edit && !readOnly,
       // editShell false: the agent can't run commands in 'edit' mode (Claude Code on Windows)
@@ -94,6 +100,26 @@ function workerList(ctx) {
 const teamView = (ctx, workers) => {
   const readOnly = ctx.config.permission === 'read-only';
   return workers.map((w) => ({ ...w, textOnly: w.textOnly && !readOnly }));
+};
+
+/**
+ * Every model the lead may give work to under the run's budget (catalog.js); `ctx.catalogSource`
+ * replaces it in tests. Loads the adapters so lanes can be opened at once.
+ */
+async function loadCatalog(ctx) {
+  let catalog = [];
+  try {
+    catalog = ctx.catalogSource ? await ctx.catalogSource() : await buildCatalog(await getAgents(), { budget: ctx.config.budget || 'any' });
+  } catch (err) {
+    ctx.note(`Model kataloğu alınamadı (${err.message}); yönetici yalnızca mevcut ekiple çalışacak.`, 'warn');
+  }
+  await ctx.ensureAdapters(catalog.map((p) => p.agentId));
+  return catalog;
+}
+
+const parallelOf = (ctx) => {
+  const n = Number(ctx.config.parallel);
+  return n >= 1 && n <= 10 ? Math.round(n) : DEFAULT_PARALLEL;
 };
 
 /** "%80 kullanıldı" / "950 / 1000 istek kaldı" per agent, for the lead's team list (best effort). */
@@ -181,7 +207,10 @@ async function leadTurn(ctx, prompt) {
     if (!resumable || err.sawOutput || err.name === 'AbortError' || !mayBeStaleSession(err)) throw err;
     ctx.note('Yöneticinin önceki oturumu sürdürülemedi; yeni oturum başlatılıyor.', 'warn');
     ctx.lane('lead').sessionId = undefined;
-    const recap = P.leadRecap({ goal: ctx.state.goal, workers: teamView(ctx, workerList(ctx)), log: ctx.state.log, budget: ctx.config.budget, permission: ctx.config.permission });
+    const recap = P.leadRecap({
+      goal: ctx.state.goal, workers: teamView(ctx, workerList(ctx)), log: ctx.state.log, budget: ctx.config.budget, permission: ctx.config.permission,
+      catalog: ctx.catalog, parallel: parallelOf(ctx),
+    });
     return work(ctx, 'lead', { prompt: `${recap}${prompt}`, permission: 'read-only', system: P.leadSystem, resume: false });
   }
 }
@@ -284,7 +313,7 @@ function teamNote(workers, budget) {
 // The lead reviews when nothing is left running, or right away when a task failed (while the
 // others keep going). Its new tasks join the running graph immediately.
 
-const view = (x) => ({ id: x.id, handle: x.w.handle, task: x.task, after: x.after });
+const view = (x) => ({ id: x.id, handle: x.w?.handle || modelRef(x.target.agentId, x.target.model), task: x.task, after: x.after });
 const needsLead = (r) => !r.ok || r.failed?.length;
 /** What survives in state for a later "devam et". */
 const compactReport = (r) => ({
@@ -303,7 +332,7 @@ function pauseNote(kind, err) {
 function costLine(done, leadTurns) {
   const by = new Map();
   for (const r of done) if (r.tier) by.set(r.tier, (by.get(r.tier) || 0) + 1);
-  const parts = ['free', 'subscription', 'paid'].filter((t) => by.has(t))
+  const parts = ['free', 'credit', 'subscription', 'paid'].filter((t) => by.has(t))
     .map((t) => `${t === 'free' ? 'ücretsiz ajanlar' : TIER_TR[t]} ${by.get(t)} görev`);
   if (leadTurns) parts.push(`yönetici ${leadTurns} tur`);
   return parts.length ? `**Maliyet:** ${parts.join(' · ')}` : '';
@@ -329,8 +358,18 @@ function composeResult(ctx, d, totals, leadTurns) {
   return lines.join('\n');
 }
 
-/** Lead loop from `firstPrompt` until the lead is done and nothing is left to run. */
-async function drive(ctx, firstPrompt, phaseTitle) {
+/** "Yönetici 46 model görüyor: OpenRouter 31 · EVREN 9 · Groq 4 · …" */
+function catalogNote(catalog, parallel) {
+  const n = catalog.reduce((a, p) => a + p.models.length, 0);
+  return `Yönetici ${n} model görüyor; her görev için modeli kendisi seçer, aynı anda en fazla ${parallel} görev çalışır: ` +
+    catalog.map((p) => `${p.name} ${p.models.length}`).join(' · ');
+}
+
+/**
+ * Lead loop until the lead is done and nothing is left to run. `makePrompt({ catalog, parallel })`
+ * builds the first prompt once the model catalog is known.
+ */
+async function drive(ctx, makePrompt, phaseTitle) {
   const st = ctx.state;
   const maxRounds = ctx.config.steps;
   st.log ||= [];
@@ -341,8 +380,12 @@ async function drive(ctx, firstPrompt, phaseTitle) {
   let reviewTree = startTree;
   ctx.save();
 
-  const workers = workerList(ctx);
-  const tasks = new Map();   // id -> { id, w, task, files, after, status, startedAt }
+  let workers = workerList(ctx);
+  const catalog = await loadCatalog(ctx);
+  const parallel = parallelOf(ctx);
+  ctx.catalog = catalog;
+  const firstPrompt = makePrompt({ catalog, parallel });
+  const tasks = new Map();   // id -> { id, n, target: { agentId, model }, prefer, w, task, files, after, status, startedAt }
   const running = new Map(); // id -> promise resolving { kind: 'task', x, report | error }
   const busy = new Set();    // lanes with a running task
   let pending = [];          // reports the lead hasn't seen yet
@@ -364,47 +407,106 @@ async function drive(ctx, firstPrompt, phaseTitle) {
     ctx.save();
   };
 
-  // Another worker for a task `w` couldn't do: same cost tier first (a free task stays free), then
-  // free ones, idle before busy; a subscription backup only when no free worker is left.
-  const alternative = (w, tried) => {
-    const out = new Set(st.exhausted || []);
-    const rank = (c) => (c.tier === w.tier ? 0 : c.tier === 'free' ? 2 : 4) + (busy.has(c.lane) ? 1 : 0);
-    return workers
-      .filter((c) => c.lane !== w.lane && !tried.has(c.lane) && !out.has(c.lane))
-      .filter((c) => ctx.config.budget !== 'free-only' || c.tier === 'free')
-      .sort((a, b) => rank(a) - rank(b))[0] || null;
+  // ---- targets: a task runs on a model ("provider:model"), on any idle lane of that model ------
+  const keyOf = (t) => modelRef(t.agentId, t.model);
+  const exhausted = (t) => (st.exhausted || []).some((k) => k === keyOf(t) || k === t.agentId); // bare id: older runs
+  const tierOf = (t) => findModel(catalog, t)?.model.tier || workers.find((w) => w.agentId === t.agentId && w.model === t.model)?.tier || modelTier(t.agentId, null);
+  const labelOf = (t) => {
+    const f = findModel(catalog, t);
+    if (f) return `${f.provider.name} · ${f.model.label}`;
+    return workers.find((w) => w.agentId === t.agentId && w.model === t.model)?.title || keyOf(t);
+  };
+  const lanesOf = (agentId) => ctx.lanes('worker').filter((l) => l.agentId === agentId);
+
+  /** Where the lead's "agent" points: a lane's handle, "provider:model" or a provider name. */
+  const resolveTarget = (name) => {
+    const w = resolveWorker(workers, name);
+    if (w) return { target: { agentId: w.agentId, model: w.model }, prefer: w.lane };
+    const ref = parseRef(name, catalog.map((p) => p.agentId));
+    const f = ref && findModel(catalog, ref);
+    if (f) return { target: { agentId: f.provider.agentId, model: f.model.id }, prefer: null };
+    return null;
   };
 
-  const markExhausted = (w) => {
-    if ((st.exhausted ||= []).includes(w.lane)) return;
-    st.exhausted.push(w.lane);
-    w.exhausted = true;
-    warnings.push(`@${w.handle} limitine ulaştı ya da oturumu kapandı; bu çalışmada ona görev verme (verirsen Ortak başka bir ajana yönlendirir).`);
+  /** An idle lane for target `t` (the preferred one first), opening a new copy when allowed. */
+  const laneFor = (t, prefer) => {
+    const same = workers.filter((w) => w.agentId === t.agentId && w.model === t.model && !busy.has(w.lane));
+    const pick = same.find((w) => w.lane === prefer) || same[0];
+    if (pick) return pick;
+    if (lanesOf(t.agentId).length < copiesOf(t.agentId) && ctx.lanes('worker').length < LANES_MAX) {
+      const l = ctx.addLane({ agentId: t.agentId, model: t.model, role: 'worker', title: labelOf(t), tier: tierOf(t) });
+      workers = workerList(ctx);
+      const w = workers.find((x) => x.lane === l.lane);
+      ctx.note(`@${w.handle} ekibe katıldı (${w.title}).`);
+      return w;
+    }
+    // Every copy of the agent is open (one Gemini web window…): an idle copy on another model
+    // switches to this one, in a new session. Busy copies make the task wait for one.
+    const idle = workers.find((w) => w.agentId === t.agentId && !busy.has(w.lane) && waitingFor(w) === 0);
+    if (!idle) return null;
+    const l = ctx.lane(idle.lane);
+    Object.assign(l, { model: t.model, title: labelOf(t), tier: tierOf(t), sessionId: undefined });
+    st.handles = (st.handles || []).filter((x) => x.lane !== l.lane);
+    ctx.emit({ kind: 'lane', lane: l.lane, agentId: l.agentId, model: l.model, role: l.role, title: l.title, tier: l.tier });
+    workers = workerList(ctx);
+    const w = workers.find((x) => x.lane === l.lane);
+    ctx.note(`@${w.handle}: ${idle.title} yerine ${w.title} ile çalışacak.`);
+    return w;
+  };
+  /** Waiting tasks the lead gave to this very lane (it keeps its model for them). */
+  const waitingFor = (w) => [...tasks.values()].filter((x) => x.status === 'waiting' && x.prefer === w.lane).length;
+
+  // Another target for a task its model couldn't do: the same tier first (a free task stays free),
+  // models already in the team before new ones, never a model that failed it or ran out.
+  const alternative = (x) => {
+    const tried = x.tried || new Set();
+    const tier = tierOf(x.target);
+    const ok = (t) => !tried.has(keyOf(t)) && !exhausted(t) && keyOf(t) !== keyOf(x.target) &&
+      tierAllowed(tierOf(t), ctx.config.budget || 'any') && t.agentId !== x.target.agentId;
+    const rank = (t) => (tierOf(t) === tier ? 0 : tierOf(t) === 'free' ? 2 : tierOf(t) === 'credit' ? 4 : 6);
+    const team = workers.map((w) => ({ agentId: w.agentId, model: w.model })).filter(ok);
+    const more = catalog.flatMap((p) => p.models.filter((m) => !m.backup).map((m) => ({ agentId: p.agentId, model: m.id }))).filter(ok);
+    return [...team.sort((a, b) => rank(a) - rank(b)), ...more.sort((a, b) => rank(a) - rank(b))][0] || null;
   };
 
-  /** A task that failed because of its agent (limit, sign-in, network, size) moves to another worker. */
+  const markExhausted = (x) => {
+    const k = keyOf(x.target);
+    if ((st.exhausted ||= []).includes(k)) return;
+    st.exhausted.push(k);
+    for (const w of workers) if (keyOf(w) === k) w.exhausted = true;
+    warnings.push(`${k} limitine ulaştı ya da oturumu kapandı; bu çalışmada ona görev verme (verirsen Ortak başka bir modele yönlendirir).`);
+  };
+
+  /** A task that failed because of its model (limit, sign-in, network, size) moves to another model. */
   const handoff = (x, r) => {
     if (r.ok || r.skipped || !HANDOFF_KINDS.has(r.kind)) return false;
-    if (r.kind === 'limit' || r.kind === 'auth') markExhausted(x.w);
-    (x.tried ||= new Set()).add(x.w.lane);
+    if (r.kind === 'limit' || r.kind === 'auth') markExhausted(x);
+    (x.tried ||= new Set()).add(keyOf(x.target));
     if (x.tried.size > HANDOFF_MAX) return false;
-    const alt = alternative(x.w, x.tried);
+    const alt = alternative(x);
     if (!alt) return false;
-    ctx.note(`${x.id}: @${x.w.handle} ${KIND_TR[r.kind]}; görev @${alt.handle} ajanına devredildi.`, 'warn');
-    x.w = alt;
+    ctx.note(`${x.id}: ${keyOf(x.target)} ${KIND_TR[r.kind]}; görev ${keyOf(alt)} modeline devredildi.`, 'warn');
+    taskEvent(x, 'moved');
+    x.target = alt;
+    x.prefer = null;
     x.status = 'waiting';
     x.startedAt = 0;
     persist();
     return true;
   };
 
+  /** The UI draws one card per task (runview: 'task' events). */
+  const taskEvent = (x, state) => ctx.emit({ kind: 'task', id: x.id, lane: x.w?.lane, state, title: line(x.task, 160) });
+
   const finishTask = (x, r) => {
     x.status = r.ok ? 'done' : r.skipped ? 'skipped' : 'failed';
     const secs = x.startedAt ? Math.round((Date.now() - x.startedAt) / 1000) : null;
-    const report = { ...r, id: x.id, handle: x.w.handle, title: x.w.title, task: x.task, secs };
+    const who = x.w || { handle: keyOf(x.target), title: labelOf(x.target), tier: tierOf(x.target) };
+    const report = { ...r, id: x.id, handle: who.handle, title: who.title, task: x.task, secs };
     pending.push(report);
-    st.log.push({ id: x.id, n: x.n, handle: x.w.handle, tier: x.w.tier, task: clip(x.task, 2000), ok: !!r.ok, skipped: !!r.skipped, secs });
-    if (!r.ok) ctx.note(`${x.id} · @${x.w.handle}: ${r.skipped ? r.text : 'görev başarısız oldu.'}`, 'warn');
+    st.log.push({ id: x.id, n: x.n, handle: who.handle, tier: who.tier, task: clip(x.task, 2000), ok: !!r.ok, skipped: !!r.skipped, secs });
+    if (x.w) taskEvent(x, x.status);
+    if (!r.ok) ctx.note(`${x.id} · @${who.handle}: ${r.skipped ? r.text : 'görev başarısız oldu.'}`, 'warn');
     persist();
   };
 
@@ -420,21 +522,23 @@ async function drive(ctx, firstPrompt, phaseTitle) {
       if (tasks.size >= MAX_TASKS_TOTAL) { warnings.push(`Görev sınırına (${MAX_TASKS_TOTAL}) ulaşıldı; fazlası çalıştırılmadı.`); break; }
       let id = t.id || `t${++st.taskSeq}`;
       while (tasks.has(id)) id = `t${++st.taskSeq}`;
-      let w = resolveWorker(workers, t.agent);
-      if (!w) {
+      const r = resolveTarget(t.agent);
+      if (!r) {
         const names = workers.map((x) => x.handle).join(', ');
-        warnings.push(`${id}: "${t.agent || '(boş)'}" adında bir ajan yok (geçerli adlar: ${names}); görev çalıştırılmadı.`);
-        ctx.note(`${id}: "${t.agent || '(boş)'}" adında bir ajan yok; görev çalıştırılmadı.`, 'warn');
+        warnings.push(`${id}: "${t.agent || '(boş)'}" ne bir ekip üyesi (${names}) ne de katalogdaki bir model; görev çalıştırılmadı. Katalogdaki adı "sağlayıcı:model" biçiminde aynen yaz.`);
+        ctx.note(`${id}: "${t.agent || '(boş)'}" bulunamadı; görev çalıştırılmadı.`, 'warn');
         continue;
       }
-      if ((st.exhausted || []).includes(w.lane)) {
-        const alt = alternative(w, new Set());
+      const x = { id, n: tasks.size, target: r.target, prefer: r.prefer, w: null, task: t.task, files: t.files, after: t.after, status: 'waiting', startedAt: 0 };
+      if (exhausted(x.target)) {
+        const alt = alternative(x);
         if (alt) {
-          ctx.note(`${id}: @${w.handle} limitine ulaşmıştı; görev @${alt.handle} ajanına verildi.`, 'warn');
-          w = alt;
+          ctx.note(`${id}: ${keyOf(x.target)} limitine ulaşmıştı; görev ${keyOf(alt)} modeline verildi.`, 'warn');
+          x.target = alt;
+          x.prefer = null;
         }
       }
-      tasks.set(id, { id, n: tasks.size, w, task: t.task, files: t.files, after: t.after, status: 'waiting', startedAt: 0 });
+      tasks.set(id, x);
       added.push(id);
     }
     if (d.tasks.length > MAX_TASKS_PER_REPLY) warnings.push(`Bir cevapta ${d.tasks.length} görev verildi; ilk ${MAX_TASKS_PER_REPLY} görev alındı.`);
@@ -448,24 +552,21 @@ async function drive(ctx, firstPrompt, phaseTitle) {
     }
     if (!added.length) return;
     ctx.phase('uygulama', `Uygulama ${++batches}`);
-    // How each task will start: now, after its dependencies, or when its worker is free.
-    const claimed = new Set([...tasks.values()].filter((x) => x.status === 'running' || (x.status === 'waiting' && !added.includes(x.id))).map((x) => x.w.lane));
-    ctx.note('**Görevler** — bağımsız olanlar aynı anda çalışır\n' + added.map((id) => {
+    ctx.note(`**Görevler** — bağımsız olanlar aynı anda çalışır (en fazla ${parallel})\n` + added.map((id) => {
       const x = tasks.get(id);
-      let when = 'hemen';
-      if (x.after.length) when = `${x.after.join(', ')} bitince`;
-      else if (claimed.has(x.w.lane)) when = `@${x.w.handle} boşalınca`;
-      claimed.add(x.w.lane);
-      return `- **${id} · @${x.w.handle}** _(${when})_ · ${x.w.title}: ${line(x.task, 260)}`;
+      const when = x.after.length ? `${x.after.join(', ')} bitince` : 'hemen';
+      return `- **${id} · ${keyOf(x.target)}** _(${when})_: ${line(x.task, 260)}`;
     }).join('\n'));
     persist();
   };
 
-  const start = (x) => {
+  const start = (x, w) => {
+    x.w = w;
     x.status = 'running';
     x.startedAt = Date.now();
-    busy.add(x.w.lane);
-    running.set(x.id, runTask(ctx, x.w, x).then(
+    busy.add(w.lane);
+    taskEvent(x, 'running');
+    running.set(x.id, runTask(ctx, w, x).then(
       (report) => ({ kind: 'task', x, report }),
       (error) => ({ kind: 'task', x, error })));
     persist();
@@ -481,14 +582,17 @@ async function drive(ctx, firstPrompt, phaseTitle) {
         if (bad) {
           finishTask(x, { ok: false, skipped: true, text: `Çalıştırılmadı: bağlı olduğu ${bad.id} başarısız oldu.` });
           changed = true;
-        } else if (deps.every((dep) => dep.status === 'done') && !busy.has(x.w.lane)) {
-          start(x);
+        } else if (deps.every((dep) => dep.status === 'done') && running.size < parallel) {
+          const w = laneFor(x.target, x.prefer);
+          if (w) { start(x, w); changed = true; }
         }
       }
     }
-    if (!running.size) { // still waiting with nothing running: a dependency cycle
+    if (!running.size) { // still waiting with nothing running: a dependency cycle or no lane at all
       for (const x of tasks.values()) {
-        if (x.status === 'waiting') finishTask(x, { ok: false, skipped: true, text: 'Çalıştırılmadı: bağımlılıkları birbirini bekliyor (döngü).' });
+        if (x.status !== 'waiting') continue;
+        const blocked = x.after.some((id) => tasks.get(id).status !== 'done');
+        finishTask(x, { ok: false, skipped: true, text: blocked ? 'Çalıştırılmadı: bağımlılıkları birbirini bekliyor (döngü).' : `Çalıştırılmadı: ${keyOf(x.target)} için şerit açılamadı.` });
       }
     }
   };
@@ -583,9 +687,12 @@ export default {
     await refreshQuota(ctx);
     const workers = teamView(ctx, workerList(ctx));
     if (ctx.config.autoTeam) ctx.note(teamNote(workers, ctx.config.budget));
-    await drive(ctx, P.leadStart({
-      goal: st.goal, workers, readOnly: ctx.config.permission === 'read-only', maxSteps: ctx.config.steps, budget: ctx.config.budget, permission: ctx.config.permission,
-    }), 'Planlama');
+    await drive(ctx, (more) => {
+      if (more.catalog.length) ctx.note(catalogNote(more.catalog, more.parallel));
+      return P.leadStart({
+        goal: st.goal, workers, readOnly: ctx.config.permission === 'read-only', maxSteps: ctx.config.steps, budget: ctx.config.budget, permission: ctx.config.permission, ...more,
+      });
+    }, 'Planlama');
     return 'waiting';
   },
 
@@ -617,13 +724,13 @@ export default {
     const unseen = st.unseen || [];
     const open = st.open || [];
     if (st.interrupted || unseen.length || open.length) {
-      await drive(ctx, P.leadResume({
-        text, interrupted: st.interrupted, unseen, open, log: st.log, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, budget: ctx.config.budget, permission: ctx.config.permission,
+      await drive(ctx, (more) => P.leadResume({
+        text, interrupted: st.interrupted, unseen, open, log: st.log, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, budget: ctx.config.budget, permission: ctx.config.permission, ...more,
       }), 'Yönetici · kaldığı yerden');
       return 'waiting';
     }
-    await drive(ctx, P.leadUser({
-      text, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, log: st.log, budget: ctx.config.budget, permission: ctx.config.permission,
+    await drive(ctx, (more) => P.leadUser({
+      text, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, log: st.log, budget: ctx.config.budget, permission: ctx.config.permission, ...more,
     }), 'Yönetici · yeni mesaj');
     return 'waiting';
   },

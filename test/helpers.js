@@ -62,6 +62,15 @@ export function fakeCtx({ cwd, lanes, agents, config = {}, script, git = true, s
     lane: (id) => meta.lanes.find((l) => l.lane === id),
     lanes: (role) => meta.lanes.filter((l) => !role || l.role === role),
     adapterOf: (laneId) => agents[ctx.lane(laneId)?.agentId] || null,
+    async ensureAdapters() {},
+    addLane(spec) {
+      let lane = spec.agentId;
+      for (let n = 2; meta.lanes.some((l) => l.lane === lane); n++) lane = `${spec.agentId}#${n}`;
+      const l = { lane, agentId: spec.agentId, model: spec.model ?? null, role: spec.role || 'worker', title: spec.title || spec.agentId, ...(spec.tier ? { tier: spec.tier } : {}) };
+      meta.lanes.push(l);
+      events.push({ kind: 'lane', ...l });
+      return l;
+    },
     canResume(laneId) {
       const l = ctx.lane(laneId);
       return !!(l?.sessionId && agents[l.agentId]?.capabilities?.resume);

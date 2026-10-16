@@ -514,6 +514,7 @@ a { color: var(--accent); }
   flex: none;
 }
 .tier-free { background: var(--green-soft); color: var(--green); }
+.tier-credit { background: var(--blue-soft); color: var(--blue); }
 .tier-subscription { background: var(--amber-soft); color: var(--amber); }
 .tier-paid { background: var(--red-soft); color: var(--red); }
 

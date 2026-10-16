@@ -14,7 +14,7 @@ import brainstorm from './brainstorm.js';
 import group from './group.js';
 import parallel from './parallel.js';
 import team from './team.js';
-import lead from './lead.js';
+import lead, { DEFAULT_PARALLEL } from './lead.js';
 import { withAttachments } from './prompts.js';
 import * as checkpoints from '../checkpoints.js';
 import * as att from '../attachments.js';
@@ -160,6 +160,8 @@ export class Orchestrator {
       const workers = list(specs, 'worker', false, MAX_LEAD_WORKERS, 'alt ajan');
       const steps = raw.steps == null ? 8 : Math.trunc(Number(raw.steps));
       if (!Number.isFinite(steps) || steps < 1 || steps > 12) throw badRequest('Adım sayısı 1 ile 12 arasında olmalı.');
+      const par = raw.parallel == null ? DEFAULT_PARALLEL : Math.trunc(Number(raw.parallel));
+      if (!Number.isFinite(par) || par < 1 || par > 10) throw badRequest('Aynı anda çalışan görev sayısı 1 ile 10 arasında olmalı.');
       entries = [{ ...boss, lane: 'lead' }, ...workers];
       Object.assign(config, {
         lead: { agentId: boss.agentId, model: boss.model },
@@ -167,6 +169,7 @@ export class Orchestrator {
         ...(auto ? { autoTeam: true } : {}),
         budget,
         steps,
+        parallel: par,
         permission,
       });
       const info = await git.repoInfo(cwd);
