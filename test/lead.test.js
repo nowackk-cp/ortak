@@ -160,3 +160,34 @@ test('çalışma sürerken yazılan mesaj yöneticiye hemen gider; yönetici sü
   assert.equal(ctx.listener, null, 'dinleme bitti');
   assert.ok(ctx.events.some((e) => e.kind === 'phase' && /^Yeni mesaj/.test(e.title)));
 });
+
+test('süre sınırını aşan görev durdurulur, yarım iş notuyla başka modele devredilir; geçmiş kaydedilir', async () => {
+  const cwd = await makeRepo();
+  const agents = { claude: editAgent('claude'), junie: editAgent('junie'), groq: textAgent('groq') };
+  const lanes = [
+    { lane: 'lead', agentId: 'claude', model: 'opus', role: 'lead', title: 'Claude Code · Opus 5.5', tier: 'subscription' },
+    { lane: 'junie', agentId: 'junie', model: 'junie-lite', role: 'worker', title: 'Junie · Junie Lite', tier: 'free' },
+    { lane: 'groq', agentId: 'groq', model: 'qwen', role: 'worker', title: 'Groq · Qwen 3.8', tier: 'free' },
+  ];
+  const plan = '```json\n{"tasks":[{"id":"t1","agent":"lite","task":"README\'ye bölüm ekle"}],"done":false}\n```';
+  const ctx = fakeCtx({
+    cwd, lanes, agents, config: { mode: 'lead', budget: 'free-first', steps: 4, taskMinutes: 0.002 },
+    script: async (lane, opts, call) => {
+      if (lane === 'lead') return call.n === 1 ? plan : DONE;
+      if (lane === 'junie') { await new Promise((r) => setTimeout(r, 3000)); return 'geç kaldım'; }
+      return 'ÖZET: eklendi';
+    },
+  });
+  ctx.catalogSource = async () => [];
+  await lead.start(ctx);
+  const first = callsOf(ctx, 'lead')[0].prompt;
+  assert.match(first, /@lite — Junie · Junie Lite — ÜCRETSİZ — YAVAŞ/);
+  assert.match(first, /SÜRE SINIRI: Bir görev 0\.002 dakikada bitmezse/);
+  assert.ok(notes(ctx).some((t) => /t1: junie:junie-lite süre sınırında bitiremedi; görev groq:qwen modeline devredildi/.test(t)), notes(ctx).join('\n'));
+  const groqTask = callsOf(ctx, 'groq')[0].prompt;
+  assert.match(groqTask, /yarım kalmış değişiklikler olabilir/);
+  assert.deepEqual(ctx.state.log.map((r) => [r.id, r.ok, r.handle]), [['t1', true, 'qwen']]);
+  const { statsOf } = await import('../server/modelstats.js');
+  assert.equal(statsOf('junie:junie-lite').timeouts, 1);
+  assert.equal(statsOf('groq:qwen').ok >= 1, true);
+});

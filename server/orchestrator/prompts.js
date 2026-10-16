@@ -1,5 +1,6 @@
 // All orchestrator prompt templates (Turkish). Keep them short and explicit.
 import { clip } from '../util.js';
+import { statsText } from '../modelstats.js';
 import { COMMAND_TIMEOUT_MS, shell } from '../commands.js';
 import { getSettings } from '../settings.js';
 
@@ -529,7 +530,8 @@ function teamList(workers) {
   };
   const cost = (w) => (w.tier ? ` — ${COST_TR[w.tier] || w.tier}${w.backup ? ' (YEDEK)' : ''}` : '');
   const quota = (w) => (w.exhausted ? ' — LİMİTİ DOLDU, görev verme' : w.quota ? ` — kota: ${w.quota}` : '');
-  return workers.map((w) => `- @${w.handle} — ${w.title}${cost(w)} — ${what(w)}${quota(w)}`).join('\n');
+  const past = (w) => (w.stats ? ` — ${statsText(w.stats)}` : '');
+  return workers.map((w) => `- @${w.handle} — ${w.title}${cost(w)}${w.slow ? ` — ${SLOW_TR}` : ''} — ${what(w)}${quota(w)}${past(w)}`).join('\n');
 }
 
 /** Budget rules for the lead (`budget` = free-first | free-only | any; undefined = older runs). */
@@ -551,6 +553,8 @@ function budgetRules(budget, workers = []) {
   return out.length ? `${out.join('\n')}\n` : '';
 }
 
+const SLOW_TR = 'YAVAŞ: küçük bir görev bile çoğu zaman dakikalar sürer; yalnızca büyük, kendi başına yürüyebilecek işler ver';
+
 const COST_SHORT = { free: 'ÜCRETSİZ', credit: 'KREDİ (EVREN bakiyesi)', subscription: 'ABONELİK (kullanıcının plan limiti)', paid: 'ÜCRETLİ (token başına)' };
 const CATALOG_MAX = 9000; // chars of the catalog block; long model lists are cut to fit
 
@@ -565,7 +569,8 @@ export function catalogBlock(catalog) {
   const name = (m) => {
     const label = clip(String(m.label || '').replace(/\((ücretsiz|free|dahil)\)/gi, '').replace(/\s+/g, ' ').trim(), 48);
     const extra = label && !foldId(m.id).includes(foldId(label)) ? ` (${label})` : '';
-    return `${m.ref}${extra}${m.tools === false ? ' [araçsız]' : ''}`;
+    const past = statsText(m.stats);
+    return `${m.ref}${extra}${m.tools === false ? ' [araçsız]' : ''}${past ? ` [${past}]` : ''}`;
   };
   const build = (max) => catalog.flatMap((p) => {
     const how = p.own ? 'kendi araçlarıyla dosya düzenler ve komut çalıştırır' : 'Ortak onun elleri olur (dosya okur, düzenler, komut çalıştırır)';
@@ -577,7 +582,7 @@ export function catalogBlock(catalog) {
     }
     return [...groups.values()].map((ms) => {
       const more = ms.length > max ? ` … ve ${ms.length - max} model daha` : '';
-      return `- ${p.name} — ${COST_SHORT[ms[0].tier] || ms[0].tier}${ms[0].backup ? ' — YEDEK' : ''} — ${how} — aynı anda ${p.copies} kopya: ` +
+      return `- ${p.name} — ${COST_SHORT[ms[0].tier] || ms[0].tier}${ms[0].backup ? ' — YEDEK' : ''}${p.slow ? ` — ${SLOW_TR}` : ''} — ${how} — aynı anda ${p.copies} kopya: ` +
         `${ms.slice(0, max).map(name).join(', ')}${more}`;
     });
   }).join('\n');
@@ -594,8 +599,12 @@ const MODEL_RULES =
   'Çok küçük modellere (adında 1b–9b, nano, mini, lite geçenler) birden çok dosyalı kod işi verme. "[araçsız]" modeller dosyalarla daha yavaş çalışır.\n' +
   '- Aynı model birden çok sağlayıcıda varsa (ör. OpenRouter ve EVREN) görevleri sağlayıcılara dağıt: limitleri ayrıdır, hem hız hem kota kazanırsın.\n';
 
-const rules = (budget, workers, { parallel, catalog } = {}) =>
-  `${parallelRules(parallel)}${catalog?.length ? MODEL_RULES : ''}${budgetRules(budget, workers)}`;
+const timeRule = (minutes) => (minutes
+  ? `- SÜRE SINIRI: Bir görev ${minutes} dakikada bitmezse Ortak onu durdurur ve başka bir modele verir. "geçmiş" bilgisi yavaş ya da sık başarısız olan modelleri gösterir; onlara küçük iş verme. Büyük işleri parçalara böl.\n`
+  : '- "geçmiş" bilgisi yavaş ya da sık başarısız olan modelleri gösterir; onlara küçük iş verme. Büyük işleri parçalara böl.\n');
+
+const rules = (budget, workers, { parallel, catalog, taskMinutes } = {}) =>
+  `${parallelRules(parallel)}${catalog?.length ? MODEL_RULES : ''}${timeRule(taskMinutes)}${budgetRules(budget, workers)}`;
 
 const LEAD_FORMAT =
   'Her cevabının sonunda tek bir ```json bloğu ver:\n' +
@@ -622,12 +631,12 @@ function parallelRules(parallel) {
     '- Aynı dosyayı değiştiren iki görev aynı anda çalışmasın: ya tek görevde birleştir ya da "after" ile sırala.\n';
 }
 
-export function leadStart({ goal, workers, readOnly, maxSteps, budget, permission = readOnly ? 'read-only' : undefined, catalog, parallel }) {
+export function leadStart({ goal, workers, readOnly, maxSteps, budget, permission = readOnly ? 'read-only' : undefined, catalog, parallel, taskMinutes }) {
   return `Kullanıcının isteği:\n${goal}\n\n${permissionLine(permission)}Ekibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
     catalogBlock(catalog) +
     'Kurallar:\n' +
     '- Gerekirse önce projeyi incele, sonra işi parçalara böl ve her parçayı en uygun modele ver: zor işleri güçlü modellere, basit işleri hızlı ve ucuz modellere.\n' +
-    rules(budget, workers, { parallel, catalog }) +
+    rules(budget, workers, { parallel, catalog, taskMinutes }) +
     '- Her görev tek başına anlaşılır olsun (ajan büyük resmi bilmiyor): hedef, ilgili dosyalar, kabul ölçütü.\n' +
     '- Görevler bitince raporları ve değişikliklerin diff\'i sana gelir; bir görev başarısız olursa diğerleri sürerken hemen haber verilir. ' +
     'Denetle; hata ya da eksik varsa somut bir düzeltme görevi ver. Test/çalıştırma gerekiyorsa komut çalıştırabilen bir ajana ver.\n' +
@@ -687,16 +696,16 @@ export function leadReport({ round, maxRounds, reports, running, waiting, diff, 
     `\n\n${LEAD_FORMAT}`;
 }
 
-export function leadUser({ text, workers, maxSteps, goal, resumed, log, budget, permission, catalog, parallel }) {
-  return (resumed ? '' : `İlk istek:\n${goal}\n\nEkibin:\n${teamList(workers)}\n\n${catalogBlock(catalog)}Kurallar:\n${rules(budget, workers, { parallel, catalog })}\n${history(log)}`) +
+export function leadUser({ text, workers, maxSteps, goal, resumed, log, budget, permission, catalog, parallel, taskMinutes }) {
+  return (resumed ? '' : `İlk istek:\n${goal}\n\nEkibin:\n${teamList(workers)}\n\n${catalogBlock(catalog)}Kurallar:\n${rules(budget, workers, { parallel, catalog, taskMinutes })}\n${history(log)}`) +
     permissionLine(permission) +
     `Kullanıcının yeni mesajı:\n${text}\n\nBuna göre ekibe görev ver ya da iş gerekmiyorsa done:true ile cevapla. En fazla ${maxSteps} denetim turun var.\n\n${LEAD_FORMAT}`;
 }
 
 /** Prepended when the lead's session was lost: the context a fresh session needs. */
-export function leadRecap({ goal, workers, log, budget, permission, catalog, parallel }) {
+export function leadRecap({ goal, workers, log, budget, permission, catalog, parallel, taskMinutes }) {
   return `Kullanıcının isteği:\n${goal}\n\n${permissionLine(permission)}Ekibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
-    `${catalogBlock(catalog)}Kurallar:\n${rules(budget, workers, { parallel, catalog })}\n${history(log)}` +
+    `${catalogBlock(catalog)}Kurallar:\n${rules(budget, workers, { parallel, catalog, taskMinutes })}\n${history(log)}` +
     '(Önceki oturumun kayboldu; gerekirse projenin şu anki hâlini dosyaları okuyarak incele.)\n\n';
 }
 
@@ -704,8 +713,8 @@ export function leadRecap({ goal, workers, log, budget, permission, catalog, par
  * The run stopped mid-way (usage limit, error, cancel, restart) and the user wants to go on:
  * reports the lead never saw + tasks that didn't finish.
  */
-export function leadResume({ text, interrupted, unseen, open, log, workers, maxSteps, goal, resumed, budget, permission, catalog, parallel }) {
-  return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n${catalogBlock(catalog)}Kurallar:\n${rules(budget, workers, { parallel, catalog })}\n${history(log)}`) +
+export function leadResume({ text, interrupted, unseen, open, log, workers, maxSteps, goal, resumed, budget, permission, catalog, parallel, taskMinutes }) {
+  return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n${catalogBlock(catalog)}Kurallar:\n${rules(budget, workers, { parallel, catalog, taskMinutes })}\n${history(log)}`) +
     permissionLine(permission) +
     `Çalışma yarıda kesilmişti${interrupted?.reason ? ` (${clip(interrupted.reason, 300)})` : ''}.\n\n` +
     (unseen.length ? `Sen görmeden biten görevlerin raporları:\n\n${reportBlocks(unseen)}\n\n` : '') +
@@ -726,5 +735,6 @@ export function leadWorkerTask({ goal, task, files, leadName, canRun = true }) {
     (files?.length ? `İlgili dosyalar: ${files.join(', ')}\n\n` : '') +
     (canRun ? '' : 'Bu çalışmada komut çalıştırma iznin yok: komut/test çalıştırmayı deneme; gerekirse yöneticin testleri başka bir ajana koşturur.\n\n') +
     'Ekipteki başka ajanlar aynı anda başka görevler üzerinde çalışıyor olabilir: yalnızca kendi görevinin dosyalarına dokun. ' +
+    'Hızlı çalış: yalnızca bu görev için gereken dosyaları oku; görev istemedikçe test yazma, kapsamlı doğrulama ve uzun rapor yapma — kabul ölçütünü sağlaman yeterli. ' +
     'Yalnızca bu görevi proje klasöründe yap; git commit yapma. Bitince ne yaptığını kısaca raporla.';
 }

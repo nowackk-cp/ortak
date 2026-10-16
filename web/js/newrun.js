@@ -78,7 +78,7 @@ function defaults(m, sf = surface) {
       return { planner: sel(false, 'claude'), workers: [sel(true, 'claude')], reviewer: sel(false, 'codex'), fixRounds: 3, permission: 'edit' };
     case 'lead':
       // auto: the server picks the team from every usable agent the budget allows (tiers.js)
-      return { lead: pick('claude', 'opus') || sel(false, 'claude'), teamMode: 'auto', budget: 'free-first', workers: leadWorkers(), steps: 8, parallel: 5, permission: 'edit' };
+      return { lead: pick('claude', 'opus') || sel(false, 'claude'), teamMode: 'auto', budget: 'free-first', workers: leadWorkers(), steps: 8, parallel: 5, taskMinutes: 10, permission: 'edit' };
     default:
       return {};
   }
@@ -126,6 +126,7 @@ function sanitize(m, c, sf = surface) {
     case 'lead': {
       const n = Number(c.steps);
       const par = Number(c.parallel);
+      const mins = Number(c.taskMinutes);
       return {
         lead: sanitizeSel(c.lead, false, 'claude'),
         teamMode: c.teamMode === 'manual' ? 'manual' : 'auto',
@@ -133,6 +134,7 @@ function sanitize(m, c, sf = surface) {
         workers: list(c.workers, false, d.workers),
         steps: n >= 1 && n <= 12 ? Math.round(n) : d.steps,
         parallel: par >= 1 && par <= 10 ? Math.round(par) : d.parallel,
+        taskMinutes: [0, 5, 10, 20, 30].includes(mins) ? mins : d.taskMinutes,
         permission: perm(c.permission, ['read-only', 'edit', 'full'], d.permission),
       };
     }
@@ -248,7 +250,7 @@ export function runConfig() {
     case 'parallel': return { mode, participants: c.participants.map(s), permission: c.permission };
     case 'team': return { mode, planner: s(c.planner), workers: c.workers.map(s), reviewer: s(c.reviewer), fixRounds: c.fixRounds, permission: c.permission };
     case 'lead': return {
-      mode, lead: s(c.lead), workers: c.teamMode === 'auto' ? 'auto' : c.workers.map(s), budget: c.budget, steps: c.steps, parallel: c.parallel, permission: c.permission,
+      mode, lead: s(c.lead), workers: c.teamMode === 'auto' ? 'auto' : c.workers.map(s), budget: c.budget, steps: c.steps, parallel: c.parallel, taskMinutes: c.taskMinutes, permission: c.permission,
     };
     default: return { mode };
   }
@@ -591,6 +593,7 @@ function leadSetup(card, c) {
     advanced(
       field('En fazla denetim', seg(nums([3, 5, 8, 12]), () => c.steps, (n) => { c.steps = n; save(); }, 'En fazla denetim'), 'Yönetici işler bitince (bir iş başarısız olursa hemen) sonuçları denetler ve gerekirse yeni görev verir.'),
       field('Aynı anda görev', seg(nums([1, 3, 5, 8]), () => c.parallel, (n) => { c.parallel = n; save(); }, 'Aynı anda görev'), 'Bağımsız görevler aynı anda bu kadar modelde çalışır. Yönetici her görev için modeli katalogdan seçer; aynı model meşgulse yeni bir kopyası açılır.'),
+      field('Görev süre sınırı', seg([5, 10, 20, 30, 0].map((n) => ({ id: n, label: n ? `${n} dk` : 'Yok' })), () => c.taskMinutes, (n) => { c.taskMinutes = n; save(); }, 'Görev süre sınırı'), 'Bu sürede bitmeyen görev durdurulur ve başka bir modele verilir (Junie gibi yavaş ajanlar işi tıkamasın).'),
       field('Yetki', permissionControl(c, ['read-only', 'edit', 'full']))));
 }
 

@@ -4,6 +4,7 @@
 // the lead picks the model per task and Ortak opens another lane when one copy is busy.
 import { findAdapter } from './limits.js';
 import { modelTier, tierAllowed } from './tiers.js';
+import { statsOf } from './modelstats.js';
 
 // Copies of one agent that may work at once (each its own lane and session). One browser window
 // for Gemini web and one Antigravity app; local CLIs are also bound by the maxConcurrent setting.
@@ -11,6 +12,11 @@ const COPIES = { gemini: 1, antigravity: 1, groq: 3, openrouter: 4, evren: 4, cl
 const DEFAULT_COPIES = 2;
 
 export const copiesOf = (agentId) => COPIES[agentId] ?? DEFAULT_COPIES;
+
+// Agents whose every task takes minutes whatever its size (Junie: a JVM per turn, then its own
+// plan → edit → verify → report loop). The lead is told, so small jobs go elsewhere.
+const SLOW = new Set(['junie']);
+export const isSlow = (agentId) => SLOW.has(agentId);
 export const modelRef = (agentId, modelId) => `${agentId}:${modelId}`;
 
 /**
@@ -53,6 +59,7 @@ export async function buildCatalog(agents, { budget = 'free-first' } = {}) {
       }
       models.push({
         id: m.id, ref: modelRef(a.id, m.id), label: m.label || m.id, tier, isDefault: !!m.default,
+        ...(statsOf(modelRef(a.id, m.id)) ? { stats: statsOf(modelRef(a.id, m.id)) } : {}),
         ...(typeof tools === 'boolean' ? { tools } : {}),
         ...(budget === 'free-first' && tier === 'subscription' ? { backup: true } : {}),
       });
@@ -61,7 +68,7 @@ export async function buildCatalog(agents, { budget = 'free-first' } = {}) {
     // free first, then credit, then the rest; the agent's default first within a tier
     const rank = { free: 0, credit: 1, subscription: 2, paid: 3 };
     models.sort((x, y) => (rank[x.tier] ?? 4) - (rank[y.tier] ?? 4) || Number(y.isDefault) - Number(x.isDefault));
-    out.push({ agentId: a.id, name: a.name || a.id, own, copies: copiesOf(a.id), models });
+    out.push({ agentId: a.id, name: a.name || a.id, own, copies: copiesOf(a.id), ...(isSlow(a.id) ? { slow: true } : {}), models });
   }
   return out;
 }

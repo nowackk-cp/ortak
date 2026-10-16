@@ -15,20 +15,22 @@ import { errorKind, mayBeStaleSession } from '../errors.js';
 import { promptBudget, reviewDiff } from './diffview.js';
 import { getAgents, getLimits } from '../limits.js';
 import { modelTier, tierAllowed, TIER_TR } from '../tiers.js';
-import { buildCatalog, copiesOf, findModel, modelRef, parseRef } from '../catalog.js';
+import { buildCatalog, copiesOf, findModel, isSlow, modelRef, parseRef } from '../catalog.js';
+import { recordTask, statsOf } from '../modelstats.js';
 
 const MAX_TASKS_PER_REPLY = 12; // tasks taken from one lead answer
 const MAX_TASKS_TOTAL = 40;     // per lead loop
 export const DEFAULT_PARALLEL = 5; // tasks running at the same time (config.parallel)
+export const DEFAULT_TASK_MINUTES = 10; // a task running longer is stopped and handed over (config.taskMinutes, 0 = no limit)
 const LANES_MAX = 16;           // worker lanes per run, the lead's extra copies included
 // Lead failures after which the run waits for "devam et" instead of ending in an error.
 const PAUSE_KINDS = new Set(['limit', 'transient', 'auth']);
 const DIFF_EVENT_MAX = 1_500_000;
 // A failed task is handed to another worker when the failure is about that agent, not the task.
-const HANDOFF_KINDS = new Set(['limit', 'transient', 'auth', 'toolarge']);
+const HANDOFF_KINDS = new Set(['limit', 'transient', 'auth', 'toolarge', 'timeout']);
 const HANDOFF_MAX = 2;          // other workers tried per task
 const QUOTA_WAIT_MS = 3000;     // how long a run start waits for the quota overview
-const KIND_TR = { limit: 'limiti doldu', transient: 'geçici bir hata verdi', auth: 'oturumu kapalı', toolarge: 'isteği kaldıramadı' };
+const KIND_TR = { limit: 'limiti doldu', transient: 'geçici bir hata verdi', auth: 'oturumu kapalı', toolarge: 'isteği kaldıramadı', timeout: 'süre sınırında bitiremedi' };
 
 // ---- names ------------------------------------------------------------------------------------
 
@@ -82,6 +84,8 @@ function workerList(ctx) {
     return {
       lane: l.lane, agentId: l.agentId, model: l.model, title: shortTitle(l.title), handle,
       tier,
+      slow: isSlow(l.agentId),
+      stats: statsOf(key),
       backup: ctx.config.budget === 'free-first' && tier !== 'free',
       quota: st.quota?.[l.agentId] || null,
       exhausted: (st.exhausted || []).includes(l.lane) || (st.exhausted || []).includes(modelRef(l.agentId, l.model)),
@@ -120,6 +124,11 @@ async function loadCatalog(ctx) {
 const parallelOf = (ctx) => {
   const n = Number(ctx.config.parallel);
   return n >= 1 && n <= 10 ? Math.round(n) : DEFAULT_PARALLEL;
+};
+
+const taskMinutesOf = (ctx) => {
+  const n = ctx.config.taskMinutes;
+  return n === 0 || (Number(n) > 0 && Number(n) <= 120) ? Number(n) : DEFAULT_TASK_MINUTES;
 };
 
 /** "%80 kullanıldı" / "950 / 1000 istek kaldı" per agent, for the lead's team list (best effort). */
@@ -211,7 +220,7 @@ async function leadTurn(ctx, prompt) {
     ctx.lane('lead').sessionId = undefined;
     const recap = P.leadRecap({
       goal: ctx.state.goal, workers: teamView(ctx, workerList(ctx)), log: ctx.state.log, budget: ctx.config.budget, permission: ctx.config.permission,
-      catalog: ctx.catalog, parallel: parallelOf(ctx),
+      catalog: ctx.catalog, parallel: parallelOf(ctx), taskMinutes: taskMinutesOf(ctx),
     });
     return work(ctx, 'lead', { prompt: `${recap}${prompt}`, permission: 'read-only', system: P.leadSystem, resume: false });
   }
@@ -406,8 +415,9 @@ async function drive(ctx, makePrompt, phaseTitle) {
   let workers = workerList(ctx);
   const catalog = await loadCatalog(ctx);
   const parallel = parallelOf(ctx);
+  const taskMinutes = taskMinutesOf(ctx);
   ctx.catalog = catalog;
-  const firstPrompt = makePrompt({ catalog, parallel });
+  const firstPrompt = makePrompt({ catalog, parallel, taskMinutes });
   const tasks = new Map();   // id -> { id, n, target: { agentId, model }, prefer, w, task, files, after, status, startedAt }
   const running = new Map(); // id -> promise resolving { kind: 'task', x, report | error }
   const busy = new Set();    // lanes with a running task
@@ -488,7 +498,7 @@ async function drive(ctx, makePrompt, phaseTitle) {
     const tier = tierOf(x.target);
     const ok = (t) => !tried.has(keyOf(t)) && !exhausted(t) && keyOf(t) !== keyOf(x.target) &&
       tierAllowed(tierOf(t), ctx.config.budget || 'any') && t.agentId !== x.target.agentId;
-    const rank = (t) => (tierOf(t) === tier ? 0 : tierOf(t) === 'free' ? 2 : tierOf(t) === 'credit' ? 4 : 6);
+    const rank = (t) => (tierOf(t) === tier ? 0 : tierOf(t) === 'free' ? 2 : tierOf(t) === 'credit' ? 4 : 6) + (isSlow(t.agentId) ? 1 : 0);
     const team = workers.map((w) => ({ agentId: w.agentId, model: w.model })).filter(ok);
     const more = catalog.flatMap((p) => p.models.filter((m) => !m.backup).map((m) => ({ agentId: p.agentId, model: m.id }))).filter(ok);
     return [...team.sort((a, b) => rank(a) - rank(b)), ...more.sort((a, b) => rank(a) - rank(b))][0] || null;
@@ -510,8 +520,13 @@ async function drive(ctx, makePrompt, phaseTitle) {
     if (x.tried.size > HANDOFF_MAX) return false;
     const alt = alternative(x);
     if (!alt) return false;
+    recordTask(keyOf(x.target), { ok: false, secs: secsOf(x), kind: r.kind });
     ctx.note(`${x.id}: ${keyOf(x.target)} ${KIND_TR[r.kind]}; görev ${keyOf(alt)} modeline devredildi.`, 'warn');
     taskEvent(x, 'moved');
+    if (r.kind === 'timeout' && !x.retold) { // the stopped model may have left half-done edits
+      x.retold = true;
+      x.task += `\n\nNot: Bu görevi önce başka bir model denedi ama ${taskMinutes} dakikada bitiremedi; yarım kalmış değişiklikler olabilir. Önce ilgili dosyaların şu anki hâline bak, sonra görevi tamamla.`;
+    }
     x.target = alt;
     x.prefer = null;
     x.status = 'waiting';
@@ -523,6 +538,8 @@ async function drive(ctx, makePrompt, phaseTitle) {
   /** The UI draws one card per task (runview: 'task' events). */
   const taskEvent = (x, state) => ctx.emit({ kind: 'task', id: x.id, lane: x.w?.lane, state, title: line(x.task, 160) });
 
+  const secsOf = (x) => (x.startedAt ? Math.round((Date.now() - x.startedAt) / 1000) : null);
+
   const finishTask = (x, r) => {
     if (x.cancelled) { // the lead cancelled it: it knows, no report needed
       x.status = 'skipped';
@@ -532,7 +549,8 @@ async function drive(ctx, makePrompt, phaseTitle) {
       return;
     }
     x.status = r.ok ? 'done' : r.skipped ? 'skipped' : 'failed';
-    const secs = x.startedAt ? Math.round((Date.now() - x.startedAt) / 1000) : null;
+    const secs = secsOf(x);
+    if (!r.skipped && x.w) recordTask(keyOf(x.target), { ok: !!r.ok, secs, ...(r.kind ? { kind: r.kind } : {}) });
     const who = x.w || { handle: keyOf(x.target), title: labelOf(x.target), tier: tierOf(x.target) };
     const report = { ...r, id: x.id, handle: who.handle, title: who.title, task: x.task, secs };
     pending.push(report);
@@ -613,6 +631,16 @@ async function drive(ctx, makePrompt, phaseTitle) {
     x.startedAt = Date.now();
     busy.add(w.lane);
     taskEvent(x, 'running');
+    if (taskMinutes) {
+      // past the limit the lane's turn is stopped (again every few seconds: between two turns of
+      // a text-only worker nothing runs to stop) and the task goes to another model
+      x.timer = setTimeout(() => {
+        x.timedOut = true;
+        const kill = () => ctx.stopLane?.(w.lane);
+        kill();
+        x.killer = setInterval(kill, 2000);
+      }, taskMinutes * 60_000);
+    }
     running.set(x.id, runTask(ctx, w, x).then(
       (report) => ({ kind: 'task', x, report }),
       (error) => ({ kind: 'task', x, error })));
@@ -695,9 +723,17 @@ async function drive(ctx, makePrompt, phaseTitle) {
       const next = await Promise.race([...running.values(), leadP, leadP || fatal ? null : msgP].filter(Boolean));
       if (next.kind === 'msg') { msgP = null; continue; }
       if (next.kind === 'task') {
-        running.delete(next.x.id);
-        busy.delete(next.x.w.lane);
+        const x = next.x;
+        running.delete(x.id);
+        busy.delete(x.w.lane);
+        clearTimeout(x.timer);
+        clearInterval(x.killer);
         if (next.error) throw next.error; // abort: the other tasks see the same signal
+        if (x.timedOut && next.report.kind === 'stopped') {
+          next.report.kind = 'timeout';
+          next.report.text = `Süre sınırı (${taskMinutes} dk) aşıldı; görev durduruldu.`;
+        }
+        x.timedOut = false;
         if (!handoff(next.x, next.report)) finishTask(next.x, next.report);
       } else {
         leadP = null;
@@ -728,6 +764,8 @@ async function drive(ctx, makePrompt, phaseTitle) {
     if (PAUSE_KINDS.has(kind)) { ctx.note(pauseNote(kind, err), 'warn'); return 'paused'; }
     if (kind !== 'abort') ctx.note('Kaldığı yer kaydedildi; "devam et" yazarak sürdürebilirsin.', 'info');
     throw err;
+  } finally {
+    for (const x of tasks.values()) { clearTimeout(x.timer); clearInterval(x.killer); }
   }
   ctx.listen?.(null);
   st.unseen = [];

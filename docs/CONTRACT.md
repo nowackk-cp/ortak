@@ -292,7 +292,10 @@ turn's system prompt gets `CHAT_SURFACE` (plain conversation, no file/shell tool
 // bütçe kurallarına uyar. workers: 'auto' → ekibi tiers.autoTeam() seçer (GET /api/team/auto önizler).
 // Bir alt ajan limit/oturum/ağ/boyut hatası verirse görev aynı ücret sınıfındaki boştaki başka ajana devredilir
 // (state.exhausted: limiti dolan "sağlayıcı:model" adları; onlara verilen görevler yönlendirilir).
-{ mode: 'lead', cwd, prompt, lead: { agentId, model }, workers: [{ agentId, model }] | 'auto', budget: 'free-first', steps: 8, parallel: 5, permission }
+// taskMinutes (0 = sınırsız, varsayılan 10): süreyi aşan görevin şeridi durdurulur (ctx.stopLane), görev 'timeout'
+// türüyle başka modele devredilir. Her görevin sonucu ve süresi modelstats.js'e (data/model-stats.json) yazılır;
+// katalog ve ekip listesi bunu "geçmiş" olarak gösterir.
+{ mode: 'lead', cwd, prompt, lead: { agentId, model }, workers: [{ agentId, model }] | 'auto', budget: 'free-first', steps: 8, parallel: 5, taskMinutes: 10, permission }
 ```
 
 The same agent may appear more than once (e.g. two Claude models); lanes are made unique as
