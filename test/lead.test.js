@@ -118,9 +118,9 @@ test('yönetici katalogdan model seçer: meşgul modelin yeni kopyası açılır
   for (const l of orLanes) assert.equal(callsOf(ctx, l).length, 1);
   assert.equal(ctx.lane('gemini').model, 'pro', 'tek kopyalı Gemini sonraki görev için modelini değiştirdi');
   assert.equal(callsOf(ctx, 'gemini').length, 2);
-  assert.ok(notes(ctx).some((t) => /ekibe katıldı/.test(t)));
   assert.ok(notes(ctx).some((t) => /@pro: Gemini · 4 Argon yerine Gemini · Pro ile çalışacak/.test(t)), notes(ctx).join('\n'));
-  assert.ok(notes(ctx).some((t) => /@qwen3-coder-2 ekibe katıldı/.test(t)) && notes(ctx).some((t) => /@qwen3-coder-3 ekibe katıldı/.test(t)));
+  assert.deepEqual(ctx.state.handles.map((x) => x.handle).filter((x) => x.startsWith('qwen3')), ['qwen3-coder', 'qwen3-coder-2', 'qwen3-coder-3']);
+  assert.ok(ctx.events.some((e) => e.kind === 'lane' && e.lane === 'openrouter#3'));
   assert.ok(notes(ctx).some((t) => /Yönetici 3 model görüyor; .* aynı anda en fazla 3 görev/.test(t)));
   const result = ctx.events.find((e) => e.kind === 'result').text;
   assert.match(result, /ücretsiz ajanlar 5 görev/);

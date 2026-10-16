@@ -45,9 +45,15 @@ function clean(obj) {
   return out;
 }
 
+// v2: maxConcurrent default 2 → 5. A file written before that holds the old default for every
+// user who saved any setting, so 2 there means "default", not a choice.
+const VERSION = 2;
+
 function load() {
   try {
-    return { ...DEFAULTS, ...clean(JSON.parse(fs.readFileSync(FILE, 'utf8'))) };
+    const raw = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    if (raw && raw.version !== VERSION && raw.maxConcurrent === 2) delete raw.maxConcurrent;
+    return { ...DEFAULTS, ...clean(raw) };
   } catch {
     return { ...DEFAULTS };
   }
@@ -67,7 +73,7 @@ export function updateSettings(patch) {
   current = { ...current, ...good };
   fs.mkdirSync(DATA, { recursive: true });
   const tmp = `${FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(current, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify({ ...current, version: VERSION }, null, 2));
   fs.renameSync(tmp, FILE);
   for (const fn of listeners) { try { fn(current); } catch (err) { console.error('[settings]', err); } }
   return current;

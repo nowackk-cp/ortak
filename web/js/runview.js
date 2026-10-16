@@ -10,6 +10,18 @@ import { fmtInt, fmtCost, fmtDuration, fmtDate, truncate, basename, enc, copyTex
 import { api, toast } from './api.js';
 
 const TERMINAL = new Set(['done', 'error', 'cancelled']);
+const STALL_MS = 150_000; // no output for this long: the card says the agent may be stuck
+// lead task verdicts ('task' events) → card state and label
+const TASK_STATE = { done: 'done', failed: 'error', skipped: 'cancelled', cancelled: 'cancelled', moved: 'cancelled' };
+const TASK_LABEL = { failed: 'Başarısız', skipped: 'Atlandı', cancelled: 'İptal', moved: 'Devredildi' };
+
+/** "45 sn", "3 dk 05 sn", "1 sa 02 dk" */
+function clockText(ms) {
+  const t = Math.max(0, Math.round(ms / 1000));
+  if (t < 60) return `${t} sn`;
+  if (t < 3600) return `${Math.floor(t / 60)} dk ${String(t % 60).padStart(2, '0')} sn`;
+  return `${Math.floor(t / 3600)} sa ${String(Math.floor((t % 3600) / 60)).padStart(2, '0')} dk`;
+}
 export const isTerminal = (s) => TERMINAL.has(s);
 
 // ---- transcript items ------------------------------------------------------------------------
@@ -63,6 +75,7 @@ function toolSummary(input, cwd) {
 class ToolChip {
   constructor(name, input, cwd) {
     this.done = false;
+    this.name = name || 'Araç';
     this.ico = h('span', { class: 'tool-ico' }, spinner());
     this.body = h('div', { class: 'tool-body' });
     const sum = toolSummary(input, cwd);
@@ -87,6 +100,44 @@ class ToolChip {
     this.el.classList.remove('running');
     this.el.classList.add(ok ? 'ended' : 'stopped');
     this.ico.replaceChildren(icon(ok ? 'check' : 'x'));
+  }
+}
+
+/**
+ * Consecutive tool calls of one turn in one row: past three, only the last call stays visible and
+ * a header ("5 araç çağrısı daha · Read ×3 · Grep ×2") unfolds the rest.
+ */
+class ToolRun {
+  constructor() {
+    this.chips = [];
+    this.open = false;
+    this.head = h('button', { type: 'button', class: 'tool-run-head', hidden: true, onclick: () => this.toggle() });
+    this.body = h('div', { class: 'tool-run-body' });
+    this.el = h('div', { class: 'tool-run collapsed' }, this.head, this.body);
+  }
+  add(chip) {
+    this.chips.push(chip);
+    this.body.append(chip.el);
+    this.paint();
+  }
+  toggle() {
+    this.open = !this.open;
+    this.el.classList.toggle('collapsed', !this.open);
+    this.paint();
+  }
+  paint() {
+    const n = this.chips.length;
+    this.head.hidden = n < 3;
+    if (n < 3) return;
+    const counts = new Map();
+    for (const c of this.chips) counts.set(c.name, (counts.get(c.name) || 0) + 1);
+    const kinds = [...counts].map(([k, v]) => (v > 1 ? `${k} ×${v}` : k)).join(' · ');
+    const failed = this.chips.filter((c) => c.el.classList.contains('error')).length;
+    fill(this.head,
+      icon('chevron', 'trh-chev'),
+      h('span', { class: 'trh-n', text: this.open ? `${n} araç çağrısı` : `${n - 1} araç çağrısı daha` }),
+      h('span', { class: 'trh-kinds', text: kinds }),
+      failed > 0 && h('span', { class: 'trh-err', text: `${failed} hata` }));
   }
 }
 
@@ -198,6 +249,18 @@ class Block {
     this.statusText = '';
     this.preview = ''; // one line for a folded lane card
     this.onChange = null;
+    this.startedAt = 0; // running since (card clock)
+    this.lastAt = 0;    // last event: "no output for 3 min" warns about a stuck agent
+    this.toolRun = null;
+  }
+
+  /** A tool chip, grouped with the calls right before it. */
+  pushTool(chip) {
+    if (!this.toolRun || !this.isLast(this.toolRun.el)) {
+      this.toolRun = new ToolRun();
+      this.push(this.toolRun.el);
+    }
+    this.toolRun.add(chip);
   }
 
   st(lane) {
@@ -212,7 +275,12 @@ class Block {
   push(node) { this.el.append(node); return node; }
   isLast(node) { return !!node && this.el.lastChild === node; }
 
-  setState(v) { if (this.state !== v) { this.state = v; this.onChange?.(); } }
+  setState(v, ts) {
+    if (this.state === v) return;
+    if (v === 'running') this.startedAt = ts || Date.now();
+    this.state = v;
+    this.onChange?.();
+  }
   setStatusText(t) { if (this.statusText !== t) { this.statusText = t; this.onChange?.(); } }
 
   newMsg(s) {
@@ -260,9 +328,10 @@ class Block {
   agent(lane, e, ts) {
     const s = this.st(lane);
     const type = e.type;
+    this.lastAt = Math.max(this.lastAt, ts || Date.now());
     if (type !== 'done' && type !== 'error' && type !== 'usage') {
       if (!s.start) s.start = ts || Date.now();
-      if (!s.err) this.setState('running');
+      if (!s.err) this.setState('running', ts);
     }
     switch (type) {
       case 'text-delta': {
@@ -306,7 +375,7 @@ class Block {
         s.thinking = null;
         this.preview = `${e.name || 'Araç'} ${toolSummary(e.input, this.view.cwd)}`.trim();
         const chip = new ToolChip(e.name, e.input, this.view.cwd);
-        this.push(chip.el);
+        this.pushTool(chip);
         this.tools.set(`${lane}\u0001${e.id ?? Math.random()}`, chip);
         break;
       }
@@ -316,10 +385,11 @@ class Block {
           this.closeMsg(s);
           s.last = null;
           chip = new ToolChip(e.name || 'Araç', undefined, this.view.cwd);
-          this.push(chip.el);
+          this.pushTool(chip);
           this.tools.set(`${lane}\u0001${e.id ?? Math.random()}`, chip);
         }
         chip.finish(e.output, !!e.isError);
+        if (this.toolRun?.chips.includes(chip)) this.toolRun.paint();
         break;
       }
       case 'status':
@@ -530,7 +600,7 @@ export class RunView {
       return;
     }
     this.renderLanesBar();
-    for (const sec of this.sections) for (const col of sec.cols.values()) this.renderColHead(col);
+    for (const sec of this.sections) for (const col of sec.cards) this.renderColHead(col);
     this.hooks.onLanes?.(this);
   }
 
@@ -575,10 +645,7 @@ export class RunView {
     if (this.single) this.renderLanesBar();
     else {
       this.renderLanesBar();
-      for (const sec of this.sections) {
-        const col = sec.cols.get(lane);
-        if (col) this.renderColHead(col);
-      }
+      for (const sec of this.sections) for (const col of sec.cards) if (col.lane === lane) this.renderColHead(col);
     }
     return info;
   }
@@ -596,7 +663,8 @@ export class RunView {
     h('span', { class: 'lc-model', text: shortModel(info) }),
     info.role && info.role !== 'worker' && h('span', { class: 'lc-role', text: roleLabel(info.role) }),
     tierBadge(laneTier(info))));
-    this.lanesBar.replaceChildren(...chips);
+    const busy = this.status === 'running' ? [...this.lanes.values()].filter((i) => i.state === 'running').length : 0;
+    this.lanesBar.replaceChildren(...(busy ? [h('span', { class: 'lanes-sum', title: 'Şu an çalışan ajanlar' }, spinner('sm'), `${busy} çalışıyor`)] : []), ...chips);
     this.lanesBar.hidden = !chips.length;
   }
 
@@ -641,7 +709,8 @@ export class RunView {
       before: h('div', { class: 'sec-full' }),
       after: h('div', { class: 'sec-full' }),
       grid: null,
-      cols: new Map(),
+      cols: new Map(), // lane -> its current card
+      cards: [],       // every card of the section (a lane gets one per lead task)
     };
     if (phase) sec.el.append(phaseEl(phase.title || phase.id || ''));
     sec.el.append(sec.before, sec.after);
@@ -697,14 +766,20 @@ export class RunView {
       col.head.addEventListener('click', (e) => { if (!e.target.closest('a, button')) toggle(); });
       col.head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
       col.head.setAttribute('aria-expanded', String(col.open));
+      col.taskEl = h('div', { class: 'lane-task', hidden: true });
+      col.el.insertBefore(col.taskEl, block.el);
       col.el.insertBefore(col.prev, block.el);
     }
     block.onChange = () => this.renderColHead(col);
     sec.cols.set(lane, col);
-    const order = [...this.lanes.keys()];
-    [...sec.cols.values()]
-      .sort((a, b) => order.indexOf(a.lane) - order.indexOf(b.lane))
-      .forEach((c) => sec.grid.append(c.el));
+    sec.cards.push(col);
+    if (this.stack) sec.grid.append(col.el); // cards in the order work started
+    else {
+      const order = [...this.lanes.keys()];
+      [...sec.cols.values()]
+        .sort((a, b) => order.indexOf(a.lane) - order.indexOf(b.lane))
+        .forEach((c) => sec.grid.append(c.el));
+    }
     sec.grid.style.setProperty('--cols', String(sec.cols.size));
     sec.grid.classList.toggle('single', sec.cols.size === 1);
     this.renderColHead(col);
@@ -713,18 +788,31 @@ export class RunView {
 
   renderColHead(col) {
     const info = this.lanes.get(col.lane) || { lane: col.lane };
-    const st = col.block.state;
+    const live = col.block.state === 'running' && this.status === 'running';
+    // the lead's verdict on the task wins over the last turn's state (a turn can end fine while
+    // the task failed, was cancelled or moved to another model)
+    const st = col.task && !live && TASK_STATE[col.task.state] ? TASK_STATE[col.task.state] : col.block.state;
     col.el.dataset.state = st;
     col.head.title = this.laneTip(info);
     if (this.stack) {
+      col.clock = live ? h('span', { class: 'lh-clock' }) : null;
       fill(col.head,
         icon('chevron', 'lh-chev'),
-        avatarEl(this.laneLabel(info), info.agentId, st === 'running' && this.status === 'running'),
+        avatarEl(this.laneLabel(info), info.agentId, live),
         h('span', { class: 'lh-name', text: this.laneLabel(info) }),
         h('span', { class: 'lh-model', text: shortModel(info) }),
         info.role && info.role !== 'worker' && h('span', { class: 'lh-role', text: roleLabel(info.role) }),
         tierBadge(laneTier(info)),
-        h('span', { class: `pill st-${st}` }, st === 'running' ? spinner('sm') : h('span', { class: 'dot' }), LANE_STATUS[st] || st));
+        col.clock,
+        h('span', { class: `pill st-${st}` }, live ? spinner('sm') : h('span', { class: 'dot' }), TASK_LABEL[col.task?.state] && !live ? TASK_LABEL[col.task.state] : LANE_STATUS[st] || st),
+        live && info.role !== 'lead' && h('button', {
+          type: 'button', class: 'lh-stop', title: 'Yalnızca bu ajanı durdur (takıldıysa). Çalışma devam eder.',
+          'aria-label': 'Bu ajanı durdur', onclick: () => this.stopLane(col.lane),
+        }, icon('stop')));
+      if (col.taskEl) {
+        col.taskEl.hidden = !col.task;
+        if (col.task) fill(col.taskEl, h('span', { class: 'lt-id', text: col.task.id }), h('span', { class: 'lt-title', text: col.task.title || '' }));
+      }
       this.paintPreview(col);
     } else {
       fill(col.head,
@@ -733,9 +821,45 @@ export class RunView {
         info.role && h('span', { class: 'lh-role', text: roleLabel(info.role) }),
         h('span', { class: `pill st-${st}` }, st === 'running' ? spinner('sm') : h('span', { class: 'dot' }), LANE_STATUS[st] || st));
     }
-    const show = st === 'running' && this.status === 'running';
-    col.foot.hidden = !show;
-    if (show) col.foot.replaceChildren(spinner('sm'), h('span', { text: col.block.statusText || 'Çalışıyor…' }));
+    this.paintClock(col);
+    this.paintFoot(col);
+  }
+
+  /** Running card: how long it has worked, and whether nothing came for a while (stuck?). */
+  paintClock(col) {
+    const was = !!col.stalled;
+    if (!col.clock) {
+      col.stalled = false;
+    } else {
+      const now = Date.now();
+      const b = col.block;
+      const quiet = b.lastAt ? now - Math.max(b.lastAt, b.startedAt) : 0;
+      col.stalled = quiet > STALL_MS;
+      col.clock.textContent = b.startedAt ? clockText(now - b.startedAt) : '';
+      col.clock.title = col.stalled ? `${clockText(quiet)} süredir yeni çıktı yok` : 'Çalışma süresi';
+    }
+    col.el.classList.toggle('stalled', col.stalled);
+    return was !== col.stalled;
+  }
+
+  paintFoot(col) {
+    const live = col.block.state === 'running' && this.status === 'running';
+    col.foot.hidden = !live;
+    if (!live) return;
+    if (col.stalled) {
+      col.foot.replaceChildren(icon('warn'), h('span', {
+        text: 'Bir süredir yeni çıktı yok. Bazı modeller uzun düşünür; takıldığını düşünüyorsan ■ ile yalnızca bu ajanı durdur, çalışma devam eder.',
+      }));
+    } else {
+      col.foot.replaceChildren(spinner('sm'), h('span', { text: col.block.statusText || 'Çalışıyor…' }));
+    }
+  }
+
+  async stopLane(lane) {
+    try {
+      const r = await api(`/api/runs/${enc(this.id)}/stop-lane`, { method: 'POST', body: { lane } });
+      toast(r?.stopped ? 'Ajan durduruluyor; çalışma devam ediyor.' : 'Bu ajan şu an çalışmıyor.', 'info', 2500);
+    } catch { /* toast shown */ }
   }
 
   /** Message transform for a lane: the lead / planner / reviewer's decision blocks are shown by the notes. */
@@ -755,7 +879,7 @@ export class RunView {
 
   allBlocks() {
     if (this.single) return [this.chat];
-    return this.sections.flatMap((s) => [...s.cols.values()].map((c) => c.block));
+    return this.sections.flatMap((s) => s.cards.map((c) => c.block));
   }
 
   // -- events ----------------------------------------------------------------------------------
@@ -781,6 +905,7 @@ export class RunView {
       case 'phase': this.onPhase(ev); break;
       case 'user': this.onUser(ev); break;
       case 'dequeue': this.onDequeue(ev); break;
+      case 'task': this.onTask(ev); break;
       case 'agent': this.onAgent(ev); break;
       case 'diff': this.onDiff(ev); break;
       case 'checkpoint': this.onCheckpoint(ev); break;
@@ -834,6 +959,39 @@ export class RunView {
     const target = ev.lane != null ? this.laneLabel(this.lanes.get(String(ev.lane)) || { lane: String(ev.lane) }) : null;
     const files = Array.isArray(ev.files) ? ev.files : [];
     return userEl(String(ev.text ?? ''), target, files, Array.isArray(ev.images) ? ev.images : [], flag);
+  }
+
+  /**
+   * Lead mode: every task gets a card of its own (a worker doing two tasks shows two cards), so
+   * the work of one task never piles up under another.
+   */
+  onTask(ev) {
+    if (!this.stack || ev.lane == null) return;
+    const lane = String(ev.lane);
+    const key = `${lane}\u0001${ev.id}`;
+    this.taskCols ||= new Map();
+    if (ev.state === 'running') {
+      if (this.needSection) this.newSection(null);
+      const sec = this.curSection();
+      const old = sec.cols.get(lane);
+      if (old && (old.task || old.block.el.childNodes.length)) {
+        old.block.boundary();
+        sec.cols.delete(lane); // the next event of this lane opens a fresh card
+      }
+      this.laneBlock(lane);
+      const col = sec.cols.get(lane);
+      col.task = { id: String(ev.id), title: String(ev.title || ''), state: 'running' };
+      col.block.setState('running', ev.ts);
+      col.block.lastAt = ev.ts || Date.now();
+      this.taskCols.set(key, col);
+      this.renderColHead(col);
+      return;
+    }
+    const col = this.taskCols.get(key);
+    if (!col?.task) return;
+    col.task.state = ev.state;
+    if (col.block.state === 'running' && ev.state !== 'running') col.block.setState(ev.state === 'done' ? 'done' : 'error');
+    this.renderColHead(col);
   }
 
   /** The first `count` queued messages are being sent now: they join the transcript. */
@@ -1030,11 +1188,11 @@ export class RunView {
       for (const info of this.lanes.values()) {
         if (info.state === 'running') { info.state = fin; changed = true; }
       }
-      if (changed) this.renderLanesBar();
+      if (changed || prev === 'running') this.renderLanesBar();
       if (status === 'error' && prev !== 'error') this.place(noteEl(`Çalışma hata ile sonlandı${error ? ': ' + error : '.'}`, 'error'));
       if (status === 'cancelled' && prev !== 'cancelled') this.place(noteEl('Çalışma durduruldu.', 'warn'));
     }
-    if (!this.single) for (const s of this.sections) for (const c of s.cols.values()) this.renderColHead(c);
+    if (!this.single) for (const s of this.sections) for (const c of s.cards) this.renderColHead(c);
     if (this.emptyEl && status !== 'running') this.emptyEl.replaceChildren(status === 'error' ? 'Çalışma başlatılamadı.' : 'Henüz çıktı yok.');
     this.syncTimer();
     this.updateStatusLine();
@@ -1074,7 +1232,7 @@ export class RunView {
     this.lastFlush = performance.now();
     for (const m of this.dirtySet) m.render();
     this.dirtySet.clear();
-    if (this.stack) for (const sec of this.sections) for (const c of sec.cols.values()) this.paintPreview(c);
+    if (this.stack) for (const sec of this.sections) for (const c of sec.cards) this.paintPreview(c);
     this.updateStatusLine();
     if (this.stick) this.scrollBottom(false);
   }
@@ -1088,9 +1246,14 @@ export class RunView {
   }
 
   syncTimer() {
-    const want = this.status === 'running' && this.single;
-    if (want && !this.tick) this.tick = setInterval(() => this.updateStatusLine(), 1000);
+    const want = this.status === 'running';
+    if (want && !this.tick) this.tick = setInterval(() => this.onTick(), 1000);
     if (!want && this.tick) { clearInterval(this.tick); this.tick = 0; }
+  }
+
+  onTick() {
+    if (this.single) { this.updateStatusLine(); return; }
+    for (const sec of this.sections) for (const col of sec.cards) if (col.clock && this.paintClock(col)) this.paintFoot(col);
   }
 
   updateStatusLine() {
@@ -1099,7 +1262,12 @@ export class RunView {
     this.statusLine.hidden = !show;
     if (!show) return;
     const who = this.mode === 'group' && this.lastSpeaker ? this.laneLabel(this.lanes.get(this.lastSpeaker)) : '';
-    this.statusLine.querySelector('.sl-text').textContent = this.chat.statusText || (who ? `${who} yazıyor…` : 'Çalışıyor…');
-    this.statusLine.querySelector('.sl-time').textContent = fmtDuration(Math.max(0, Date.now() - this.runningSince)).replace(/,\d sn$/, ' sn');
+    const quiet = this.chat.lastAt ? Date.now() - Math.max(this.chat.lastAt, this.runningSince) : 0;
+    const stalled = quiet > STALL_MS;
+    this.statusLine.classList.toggle('stalled', stalled);
+    this.statusLine.querySelector('.sl-text').textContent = stalled
+      ? `${clockText(quiet)} süredir yeni çıktı yok — takıldıysa Esc ile durdurabilirsin`
+      : this.chat.statusText || (who ? `${who} yazıyor…` : 'Çalışıyor…');
+    this.statusLine.querySelector('.sl-time').textContent = clockText(Math.max(0, Date.now() - this.runningSince));
   }
 }

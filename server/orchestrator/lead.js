@@ -460,11 +460,10 @@ async function drive(ctx, makePrompt, phaseTitle) {
     const pick = same.find((w) => w.lane === prefer) || same[0];
     if (pick) return pick;
     if (lanesOf(t.agentId).length < copiesOf(t.agentId) && ctx.lanes('worker').length < LANES_MAX) {
+      // a new copy shows up as its own card in the UI (lane event); no note needed
       const l = ctx.addLane({ agentId: t.agentId, model: t.model, role: 'worker', title: labelOf(t), tier: tierOf(t) });
       workers = workerList(ctx);
-      const w = workers.find((x) => x.lane === l.lane);
-      ctx.note(`@${w.handle} ekibe katıldı (${w.title}).`);
-      return w;
+      return workers.find((x) => x.lane === l.lane);
     }
     // Every copy of the agent is open (one Gemini web window…): an idle copy on another model
     // switches to this one, in a new session. Busy copies make the task wait for one.
