@@ -59,7 +59,7 @@ export async function makeContext(store, run, signal) {
      * Run one turn. Resolves { text, sessionId }. On failure rejects with the adapter error
      * (err.sawOutput tells whether the agent produced anything before failing).
      */
-    async turn(laneId, { prompt, permission = 'read-only', system, cwd, resume = true }) {
+    async turn(laneId, { prompt, permission = 'read-only', system, cwd, resume = true, tools }) {
       ctx.throwIfAborted();
       const lane = ctx.lane(laneId);
       if (!lane) throw new Error(`Bilinmeyen şerit: ${laneId}`);
@@ -105,6 +105,8 @@ export async function makeContext(store, run, signal) {
           sessionId: useSession,
           permission,
           system,
+          // Real function calling for API agents (textcoder.js runs the tools).
+          ...(tools ? { tools } : {}),
           signal,
           onEvent: (ev) => {
             if (!ev || typeof ev !== 'object' || typeof ev.type !== 'string') return;
@@ -122,7 +124,7 @@ export async function makeContext(store, run, signal) {
           } catch (err) {
             // Transient failures (overload, network, a token refresh race between Claude Code
             // processes…) that happened before any output are retried after a pause.
-            if (err?.name === 'AbortError' || signal.aborted || sawOutput || n >= RETRY_DELAYS.length || errorKind(err) !== 'transient') throw err;
+            if (err?.name === 'AbortError' || signal.aborted || sawOutput || err?.code === 'tools_unsupported' || n >= RETRY_DELAYS.length || errorKind(err) !== 'transient') throw err;
             const secs = RETRY_DELAYS[n] / 1000;
             store.append(run, { kind: 'agent', lane: laneId, event: {
               type: 'status', retry: true,
@@ -154,7 +156,8 @@ export async function makeContext(store, run, signal) {
       } catch (err) {
         if (err?.name === 'AbortError' || signal.aborted) throw new AbortError();
         const message = err?.message || String(err);
-        if (!sawError) store.append(run, { kind: 'agent', lane: laneId, event: { type: 'error', message } });
+        // A model that rejects tools is not an error for the user: textcoder.js falls back to the text protocol.
+        if (!sawError && err?.code !== 'tools_unsupported') store.append(run, { kind: 'agent', lane: laneId, event: { type: 'error', message } });
         const e = err instanceof Error ? err : new Error(message);
         e.sawOutput = sawOutput;
         throw e;

@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AbortError, truncate } from './base.js';
 import { dataDir } from '../settings.js';
+import { chatTurn, forSaving, toolsKnownUnsupported } from './openai-chat.js';
 
 const BASE = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
 const KEY_FILE = path.join(dataDir, 'openrouter.json');
@@ -186,31 +187,22 @@ function saveSession(id, data) {
 
 // ---- streaming --------------------------------------------------------------------------------
 
-async function readSse(res, onData) {
-  const decoder = new TextDecoder();
-  let buf = '';
-  for await (const chunk of res.body) {
-    buf += decoder.decode(chunk, { stream: true });
-    let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).replace(/\r$/, '');
-      buf = buf.slice(i + 1);
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === '[DONE]') continue;
-      let obj;
-      try { obj = JSON.parse(payload); } catch { continue; }
-      onData(obj);
-    }
-  }
-}
 
 // ---- export adapter ---------------------------------------------------------------------------
 
 export default {
   id: 'openrouter',
   name: 'OpenRouter (Ücretsiz)',
-  capabilities: { edit: false, resume: true, streaming: true, cwd: false, sandbox: true },
+  capabilities: { edit: false, tools: true, resume: true, streaming: true, cwd: false, sandbox: true },
+
+  /** OpenRouter publishes which models accept `tools` (supported_parameters). */
+  async supportsTools(model) {
+    const id = model && model !== 'default' ? model : 'openrouter/free';
+    if (toolsKnownUnsupported('openrouter', id) === false) return false;
+    if (id === 'openrouter/free') return true;
+    const m = (await fetchModels().catch(() => [])).find((x) => x.id === id);
+    return m?.supported_parameters ? m.supported_parameters.includes('tools') : undefined;
+  },
 
   async detect() {
     if (!apiKey()) return { available: false, reason: NO_KEY };
@@ -256,7 +248,7 @@ export default {
     }
   },
 
-  async run({ prompt, model, sessionId, system, signal, onEvent = () => {} }) {
+  async run({ prompt, model, sessionId, system, tools, signal, onEvent = () => {} }) {
     const emit = (e) => { try { onEvent(e); } catch { /* listener error */ } };
     if (signal?.aborted) throw new AbortError();
 
@@ -278,58 +270,21 @@ export default {
       if (system) messages.unshift({ role: 'system', content: system });
       messages.push({ role: 'user', content: String(prompt ?? '') });
 
-      emit({ type: 'status', text: `OpenRouter (Ücretsiz): ${modelId.split('/').pop().replace(/:free$/, '')}` });
-      const res = await request('/chat/completions', {
-        method: 'POST',
-        signal,
+      emit({ type: 'status', text: `OpenRouter (Ücretsiz): ${modelId.split('/').pop().replace(/:free$/, '')}${tools ? ' · araçlarla' : ''}` });
+      const out = await chatTurn({
+        adapter: 'openrouter', label: 'OpenRouter', request, describe, signal, emit, tools, messages,
+        fail: (message, extra) => new OpenRouterError(message, extra),
+        body: { model: modelId },
         timeoutMs: TURN_TIMEOUT_MS,
-        body: {
-          model: modelId,
-          messages,
-          stream: true,
-          stream_options: { include_usage: true },
-        },
       });
-
-      let text = '';
-      let thinking = '';
-      let usage = null;
-      let finish = null;
-
-      try {
-        await readSse(res, (obj) => {
-          if (obj.error) throw new OpenRouterError(describe(obj.error.status || 500, obj));
-          if (obj.usage) {
-            usage = {
-              inputTokens: obj.usage.prompt_tokens,
-              outputTokens: obj.usage.completion_tokens,
-              costUsd: 0, // Always 0 for free models
-            };
-          }
-          const choice = obj.choices?.[0];
-          if (!choice) return;
-          const d = choice.delta || {};
-          const r = d.reasoning_content ?? d.reasoning;
-          if (typeof r === 'string' && r) thinking += r;
-          if (typeof d.content === 'string' && d.content) {
-            if (thinking) { emit({ type: 'thinking', text: thinking }); thinking = ''; }
-            text += d.content;
-            emit({ type: 'text-delta', text: d.content });
-          }
-          if (choice.finish_reason) finish = choice.finish_reason;
-        });
-      } catch (err) {
-        if (signal?.aborted) throw new AbortError();
-        throw err instanceof OpenRouterError ? err : new OpenRouterError(`OpenRouter bağlantı hatası: akış kesildi (${err?.message || err})`);
-      }
-
-      if (thinking) emit({ type: 'thinking', text: thinking });
-      text = text.trim();
+      let { text, finish } = out;
+      const usage = out.usage ? { ...out.usage, costUsd: 0 } : null; // always free models
+      if (!text && out.toolSteps) text = '(Araçlarla çalıştı; ayrıca bir açıklama yazmadı.)';
       if (!text) throw new OpenRouterError('OpenRouter boş cevap döndü.');
       if (finish === 'length') text += '\n\n_(Cevap uzunluk sınırında kesildi.)_';
 
       messages.push({ role: 'assistant', content: text });
-      saveSession(sid, { model: modelId, updatedAt: new Date().toISOString(), messages: messages.filter((m) => m.role !== 'system') });
+      saveSession(sid, { model: modelId, updatedAt: new Date().toISOString(), messages: forSaving(messages) });
 
       emit({ type: 'message', text });
       if (usage) emit({ type: 'usage', ...usage });
@@ -337,6 +292,7 @@ export default {
       return { text, sessionId: sid, ...(usage ? { usage } : {}) };
     } catch (err) {
       if (err?.name === 'AbortError' || signal?.aborted) throw new AbortError();
+      if (err?.code === 'tools_unsupported') throw err;
       const message = err?.message || String(err);
       emit({ type: 'error', message });
       throw new Error(message);

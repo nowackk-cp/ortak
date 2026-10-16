@@ -16,12 +16,15 @@
 //   =======
 //   new lines
 //   >>>>>>> REPLACE
+//
+// API agents whose model supports function calling (Groq, OpenRouter, EVREN) get the same hands as
+// real tools instead (nativeTurn below); the text protocol stays the fallback.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import * as git from '../git.js';
 import * as P from './prompts.js';
 import { clip } from '../util.js';
-import { COMMAND_TIMEOUT_MS, policyOf, runCommand } from '../commands.js';
+import { COMMAND_TIMEOUT_MS, policyOf, runCommand, shell } from '../commands.js';
 import * as checkpoints from '../checkpoints.js';
 
 const MAX_ROUNDS = 7;          // agent turns per task (reads, commands, fix-ups)
@@ -384,7 +387,26 @@ let toolSeq = 0;
 export async function textCoderTask(ctx, laneId, opts) {
   const cp = checkpoints.begin(ctx.meta.id);
   try {
-    return await coderLoop(ctx, laneId, opts, cp);
+    let attached;
+    if (await canUseTools(ctx, laneId)) {
+      const { goal, task, files = [], permission, leadName } = opts;
+      const cwd = ctx.meta.cwd;
+      const readOnly = permission === 'read-only';
+      const tool = cardEmitter(ctx, laneId);
+      attached = files.length ? await readFiles(cwd, files) : [];
+      for (const f of attached) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
+      try {
+        const r = await nativeTurn(ctx, laneId, {
+          prompt: P.nativeCoderTask({ goal, task, listing: await projectListing(cwd), attached, readOnly, leadName }),
+          permission, cwd, system: P.nativeCoderSystem(permission),
+        }, cp);
+        return { text: r.text, applied: r.applied, failed: [...r.failed].map(([p, error]) => ({ path: p, error })), readOnly };
+      } catch (err) {
+        if (err?.code !== 'tools_unsupported') throw err;
+        fellBack(ctx, laneId, err);
+      }
+    }
+    return await coderLoop(ctx, laneId, { ...opts, attached }, cp);
   } finally {
     await emitCheckpoint(ctx, laneId, cp);
   }
@@ -400,7 +422,7 @@ async function emitCheckpoint(ctx, laneId, cp) {
   }
 }
 
-async function coderLoop(ctx, laneId, { goal, task, files = [], permission, leadName }, cp) {
+async function coderLoop(ctx, laneId, { goal, task, files = [], permission, leadName, attached: preread }, cp) {
   const cwd = ctx.meta.cwd;
   const readOnly = permission === 'read-only';
   const tool = (name, input, output, isError = false) => {
@@ -411,8 +433,8 @@ async function coderLoop(ctx, laneId, { goal, task, files = [], permission, lead
   tool.lane = laneId;
 
   const listing = await projectListing(cwd);
-  const attached = files.length ? await readFiles(cwd, files) : [];
-  for (const f of attached) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
+  const attached = preread || (files.length ? await readFiles(cwd, files) : []);
+  if (!preread) for (const f of attached) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
 
   let prompt = P.textCoderTask({ goal, task, listing, attached, readOnly, leadName });
   const applied = new Set();
@@ -469,6 +491,18 @@ const CHAT_ROUNDS = 10; // agent turns per user message (reads, listings, comman
 export async function textChatTurn(ctx, laneId, opts) {
   const cp = checkpoints.begin(ctx.meta.id);
   try {
+    if (await canUseTools(ctx, laneId)) {
+      const { prompt, permission, resume = true, cwd = ctx.meta.cwd, system } = opts;
+      try {
+        const r = await nativeTurn(ctx, laneId, {
+          prompt, permission, cwd, resume, system: [P.nativeChatSystem(permission), system].filter(Boolean).join('\n\n'),
+        }, cp);
+        return { text: r.text, applied: r.applied };
+      } catch (err) {
+        if (err?.code !== 'tools_unsupported') throw err;
+        fellBack(ctx, laneId, err);
+      }
+    }
     return await chatLoop(ctx, laneId, opts, cp);
   } finally {
     await emitCheckpoint(ctx, laneId, cp);
@@ -525,6 +559,158 @@ async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = 
       : P.textChatFollow({ files, dirs, ran, found, results: readOnly ? [] : results, current });
   }
   return { text, applied: [...applied] };
+}
+
+// ---- real function calling (API agents: Groq, OpenRouter, EVREN) ------------------------------
+// Models that support it get the same hands as tools (list_dir, read_file, grep, run_command,
+// edit_file, write_file) instead of the text protocol; the adapter loops until the model answers.
+// A model that rejects tools fails its first request with code 'tools_unsupported' and the turn
+// is redone with LIST/READ/RUN.
+
+function cardEmitter(ctx, laneId) {
+  const tool = (name, input, output, isError = false) => {
+    const id = `ortak-${++toolSeq}`;
+    ctx.emit({ kind: 'agent', lane: laneId, event: { type: 'tool-start', id, name, input } });
+    ctx.emit({ kind: 'agent', lane: laneId, event: { type: 'tool-end', id, output, isError } });
+  };
+  tool.lane = laneId;
+  return tool;
+}
+
+const fn = (name, description, properties, required = []) => ({
+  type: 'function',
+  function: { name, description, parameters: { type: 'object', properties, required } },
+});
+
+/** OpenAI-style tool definitions; read-only runs get no editing tools. */
+export function nativeToolDefs(permission) {
+  const str = (description) => ({ type: 'string', description });
+  const int = (description) => ({ type: 'integer', description });
+  const defs = [
+    fn('list_dir', 'Bir klasörün içeriğini listeler (klasörler "/" ile biter).', { path: str('Proje köküne göre klasör yolu; kök için "."') }, ['path']),
+    fn('read_file', 'Bir dosyayı okur. Büyük dosyalarda yalnızca gereken satırları iste.', {
+      path: str('Proje köküne göre dosya yolu'),
+      start_line: int('İlk satır (1\'den başlar, isteğe bağlı)'),
+      end_line: int('Son satır (isteğe bağlı)'),
+    }, ['path']),
+    fn('grep', 'Projede düzenli ifadeyle arar (büyük/küçük harf duyarsız, .gitignore\'a uyar); eşleşmeleri dosya:satır: metin olarak verir.', {
+      pattern: str('Aranacak düzenli ifade ya da metin'),
+      dir: str('Yalnızca bu klasörde ara (isteğe bağlı)'),
+    }, ['pattern']),
+    fn('run_command', `Proje klasöründe bir ${shell().name} komutu çalıştırır; çıktıyı ve çıkış kodunu verir. En fazla ${COMMAND_TIMEOUT_MS / 1000} sn.`, {
+      command: str('Çalıştırılacak komut, ör. "npm test"'),
+    }, ['command']),
+  ];
+  if (permission === 'read-only') return defs;
+  return [...defs,
+    fn('edit_file', 'Bir dosyada old_text\'i new_text ile değiştirir. old_text dosyada birebir (boşluklar dahil) ve tek bir kez geçmeli.', {
+      path: str('Proje köküne göre dosya yolu'),
+      old_text: str('Dosyadaki mevcut metin (birkaç satır bağlamla, benzersiz olacak şekilde)'),
+      new_text: str('Yerine gelecek metin'),
+    }, ['path', 'old_text', 'new_text']),
+    fn('write_file', 'Yeni bir dosya oluşturur ya da bir dosyanın tamamını verilen içerikle yazar.', {
+      path: str('Proje köküne göre dosya yolu'),
+      content: str('Dosyanın tam içeriği'),
+    }, ['path', 'content']),
+  ];
+}
+
+const intOf = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : null);
+
+function nativeFile(f) {
+  if (f.error) return `Hata: ${f.error}`;
+  const range = f.lines ? ` · satır ${f.from}-${f.to} / toplam ${f.lines}` : '';
+  const more = f.lines && f.to < f.lines ? ` — devamı için read_file(start_line=${f.to + 1})` : '';
+  return `[${f.path}${range}${f.truncated ? ' · boyut sınırı nedeniyle kesildi' : ''}${more}]\n${f.text}`;
+}
+
+/** Runs one tool call with Ortak's hands; returns the text the model sees. */
+function nativeExecutor(ctx, laneId, { cwd, permission, cp, applied, failed }) {
+  const tool = cardEmitter(ctx, laneId);
+  const readOnly = permission === 'read-only';
+  const editResult = (res) => {
+    tool(res.created ? 'Ortak: dosya oluştur' : 'Ortak: düzenle', { path: res.path }, res.ok ? 'Uygulandı' : res.error, !res.ok);
+    if (res.ok) { applied.add(res.path); failed.delete(res.path); } else failed.set(res.path, res.error);
+  };
+  return async (name, a) => {
+    switch (name) {
+      case 'list_dir': {
+        const [d] = await listDirs(cwd, [a.path || '.']);
+        tool('Ortak: klasörü listele', { path: d.path }, d.error || `${d.entries.length} öğe`, !!d.error);
+        return d.error ? `Hata: ${d.error}` : (d.entries.join('\n') || '(boş)') + (d.more ? `\n… ve ${d.more} öğe daha` : '');
+      }
+      case 'read_file': {
+        if (!a.path) return 'Hata: path gerekli';
+        const from = intOf(a.start_line), to = intOf(a.end_line);
+        const spec = from || to ? `${a.path}:${from || 1}-${to || (from || 1) + 399}` : String(a.path);
+        const [f] = await readFiles(cwd, [spec]);
+        tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
+        return nativeFile(f);
+      }
+      case 'grep': {
+        if (!a.pattern) return 'Hata: pattern gerekli';
+        const [g] = await grepAndReport(cwd, [a.dir ? `${a.pattern} @ ${a.dir}` : String(a.pattern)], tool);
+        if (g.error) return `Hata: ${g.error}`;
+        if (!g.hits.length) return 'Eşleşme yok.';
+        return `${g.hits.length + g.more} eşleşme, ${g.files} dosyada:\n${g.hits.join('\n')}${g.more ? `\n… ve ${g.more} eşleşme daha (deseni daralt ya da dir ver)` : ''}`;
+      }
+      case 'run_command': {
+        if (!a.command) return 'Hata: command gerekli';
+        const [r] = await runCommands(ctx, cwd, [String(a.command)], permission, tool);
+        if (r.refused) return `Çalıştırılmadı: ${r.refused}`;
+        return `${r.timedOut ? `Zaman aşımı: ${COMMAND_TIMEOUT_MS / 1000} sn sonra durduruldu.` : `Çıkış kodu: ${r.code}`}\n${r.output || '(çıktı yok)'}`;
+      }
+      case 'edit_file': {
+        if (readOnly) return 'Hata: salt okunur çalışma, dosya değiştirilemez.';
+        if (!a.path) return 'Hata: path gerekli';
+        const [res] = await applyEdits(cwd, [{ path: String(a.path), search: String(a.old_text ?? ''), replace: String(a.new_text ?? '') }], cp);
+        editResult(res);
+        if (res.ok) return res.created ? 'Dosya oluşturuldu.' : 'Uygulandı.';
+        return `UYGULANAMADI: ${res.error.replace(/ARA (metni|kısmı)/g, 'old_text')}. Dosyayı read_file ile yeniden okuyup tekrar dene` +
+          (a.old_text ? '.' : ' (mevcut bir dosyayı baştan yazmak için write_file kullan).');
+      }
+      case 'write_file': {
+        if (readOnly) return 'Hata: salt okunur çalışma, dosya yazılamaz.';
+        if (!a.path) return 'Hata: path gerekli';
+        let sp;
+        try { sp = safePath(cwd, String(a.path)); } catch (err) { editResult({ path: String(a.path), ok: false, error: err.message }); return `Hata: ${err.message}`; }
+        let before = null;
+        try { before = await fs.readFile(sp.abs, 'utf8'); } catch { /* new file */ }
+        const text = String(a.content ?? '').replace(/\r\n/g, '\n');
+        await cp?.note(sp.abs, sp.rel);
+        await fs.mkdir(path.dirname(sp.abs), { recursive: true });
+        await fs.writeFile(sp.abs, before?.includes('\r\n') ? text.replace(/\n/g, '\r\n') : text, 'utf8');
+        editResult({ path: sp.rel, ok: true, created: before == null });
+        return before == null ? 'Dosya oluşturuldu.' : 'Dosya baştan yazıldı.';
+      }
+      default:
+        return `Hata: bilinmeyen araç "${name}". Kullanılabilenler: ${nativeToolDefs(permission).map((d) => d.function.name).join(', ')}`;
+    }
+  };
+}
+
+/** Whether this lane's agent/model should get real tools (false only when known unsupported). */
+async function canUseTools(ctx, laneId) {
+  const adapter = ctx.adapterOf(laneId);
+  if (!adapter?.capabilities?.tools) return false;
+  try {
+    return (await adapter.supportsTools?.(ctx.lane(laneId)?.model)) !== false;
+  } catch {
+    return true;
+  }
+}
+
+function fellBack(ctx, laneId, err) {
+  ctx.emit({ kind: 'agent', lane: laneId, event: { type: 'status', text: `${err.message} LIST/READ/RUN yöntemiyle devam ediliyor.` } });
+}
+
+/** One turn with tools. Resolves { text, applied: [path], failed: Map(path → error) }. */
+async function nativeTurn(ctx, laneId, { prompt, permission, cwd, system, resume = true }, cp) {
+  const applied = new Set();
+  const failed = new Map();
+  const exec = nativeExecutor(ctx, laneId, { cwd, permission, cp, applied, failed });
+  const r = await ctx.turn(laneId, { prompt, permission: 'read-only', system, resume, tools: { defs: nativeToolDefs(permission), exec } });
+  return { text: r.text, applied: [...applied], failed };
 }
 
 export { projectListing as listing };

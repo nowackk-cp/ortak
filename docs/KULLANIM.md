@@ -32,7 +32,7 @@ Her arayüz kendi seçtiğin modu ve ayarlarını hatırlar. Geçmişten bir ça
 
 Aynı ajanı farklı modellerle birden çok kez ekleyebilirsin (örn. Claude Opus + Claude Haiku).
 
-Kendi dosya araçları olmayan modeller (Gemini web / 4 Argon, EVREN gibi API modelleri) her modda kod yazabilir: Ortak onların "eli" olur. Model `LIST: klasör` ile gezer, `READ: dosya` ile okur, değişiklikleri SEARCH/REPLACE blokları olarak verir; Ortak uygular ve sonucunu (uygulanamayan blokları dosyanın güncel hâliyle) geri bildirir. `RUN: komut` ile Codex gibi terminal de kullanırlar: Ortak komutu proje klasöründe çalıştırır (Windows'ta PowerShell, en fazla 2 dk) ve çıktıyı çıkış koduyla geri gönderir. Yetkiye göre:
+Kendi dosya araçları olmayan modeller (Gemini web / 4 Argon, EVREN, Groq, OpenRouter gibi API modelleri) her modda kod yazabilir: Ortak onların "eli" olur. Model `LIST: klasör` ile gezer, `READ: dosya` ile okur, değişiklikleri SEARCH/REPLACE blokları olarak verir; Ortak uygular ve sonucunu (uygulanamayan blokları dosyanın güncel hâliyle) geri bildirir. `RUN: komut` ile Codex gibi terminal de kullanırlar: Ortak komutu proje klasöründe çalıştırır (Windows'ta PowerShell, en fazla 2 dk) ve çıktıyı çıkış koduyla geri gönderir. Yetkiye göre:
 
 | Yetki | Hangi komutlar çalışır |
 |---|---|
@@ -50,6 +50,14 @@ Bu modellerin diğer araçları:
 | `GREP: desen` / `GREP: desen @ src/` | Tüm projede (ya da bir klasörde) arar, eşleşen satırları `dosya:satır` olarak gönderir (büyük/küçük harf duyarsız düzenli ifade; .gitignore'a uyar). |
 | **Geri al** | Ortak'ın bir turda yaptığı dosya değişiklikleri sohbette "N dosya değişti — Geri al" çubuğu olarak görünür. Geri al, dosyaları o turdan önceki hâline döndürür (yeni oluşturulanları siler). Sonradan değişen bir dosyanın üzerine yazmaz, onu atladığını söyler. |
 
+**Gerçek araç çağırma (API modelleri).** EVREN, Groq ve OpenRouter'daki modellerin çoğu *function calling* destekler (Cline, Kilo gibi kodlama araçlarının DeepSeek'i kullandığı yöntem). Ortak bu modellere yukarıdaki yazı komutları yerine gerçek araçlar verir: `list_dir`, `read_file` (satır aralığıyla), `grep`, `run_command`, `edit_file`, `write_file` (salt okunur yetkide son ikisi verilmez). Araçları yine Ortak çalıştırır: aynı yetki kuralları, aynı araç kartları, aynı **Geri al** noktaları. Model istediği kadar araç çağırır (bir mesajda en fazla 40 adım), sonra cevabını yazar. Bu yöntem metin protokolünden daha güvenilirdir: ayrıştırma hatası ya da bozuk değişiklik bloğu olmaz.
+
+- Araç desteklemeyen bir model seçilirse (ya da model aracı reddederse) Ortak bunu fark eder, bir not düşer ve aynı mesajı LIST/READ/RUN yöntemiyle yeniden yapar; o model için bundan sonra hep metin yöntemi kullanılır. OpenRouter ve EVREN hangi modelin araç desteklediğini kendileri bildirir (EVREN'de DeepSeek V4/V4.1 Flash, GLM 5.3, MiMo, Qwen ve Gemma destekler; "auto" desteklemez); Groq'da ilk denemede anlaşılır.
+- Model bozuk bir araç çağrısı üretirse hatası kendisine söylenir ve yeniden denemesi istenir. Araç kullandıktan sonra boş cevap verip durursa devam etmesi hatırlatılır.
+- Sağlayıcı araç döngüsünün ortasında geçici olarak meşgul olursa (ör. EVREN "model şu anda dolu", 503) Ortak 10, 20 ve 40 sn bekleyerek kaldığı yerden devam eder; o ana kadar yapılan iş kaybolmaz.
+- Groq'un ücretsiz planı dakikada 8.000 token ile sınırlı ve araç döngüsü her adımda sohbeti yeniden gönderir. Sağlayıcı "N sn sonra tekrar dene" derse (en fazla 45 sn) Ortak bekleyip kaldığı yerden devam eder.
+- Gemini web'in araç çağırma arayüzü yoktur; o her zaman metin yöntemini kullanır.
+
 Gemini web bir sayfa üzerinden sürüldüğü için Ortak sayfanın sağlığını izler: sayfa değişmiş görünürse (düğme, kutu ya da menü bulunamazsa), Gemini sayfada hata gösterirse ya da üst üste iki tur başarısız olursa Ajanlar panelinde Gemini'nin altında sarı bir uyarı çıkar. İlk başarılı turda uyarı kalkar. Gemini bir mesajı alıp cevaba hiç başlamazsa Ortak bunu fark eder ve mesajı bir kez yeniden gönderir.
 
 ## Ajanlar ve modelleri
@@ -64,6 +72,8 @@ Gemini web bir sayfa üzerinden sürüldüğü için Ortak sayfanın sağlığı
 | **Kilo Code** | `kilo run` | Kilo Gateway'in 300+ modeli. Hesapsız **ücretsiz** olanlar: Otomatik (ücretsiz), Nemotron 3 Ultra/Super/Nano/3.5, Laguna S/XS 2.1, Inkling Small, North Mini Code, Glyph Cluster, Dots3-Note, LFM2.5, OpenRouter Free. Diğerleri (Claude, GPT, Gemini, Grok, Qwen, GLM, Kimi…) Kilo hesabı + kredi ister; o zamana kadar listede kilitli görünür. |
 | **GitHub Copilot** | `copilot` CLI (GitHub hesabın; `gh` girişi de yeter) | Copilot Free'de yalnızca **Otomatik** (Copilot modeli kendisi seçer, ör. GPT-6 Luna); ücretli planda hesabındaki tüm modeller. Kota: ayda 200 sohbet/ajan isteği (Free). |
 | **Junie** | `junie` (JSON akışı) | **Junie Lite** (ücretsiz, varsayılan) ve JetBrains AI planı gerektiren modeller: Claude Fable 5.1 / Opus 5.5 / Opus 5 / Sonnet 5.5 / Sonnet 5 / Haiku 5.5, GPT-6-Astra / 6.1-Sol / 6-Sol / 6-Luna / 5.6-Sol / 5.6-Terra / 5.6-Luna, Gemini 3.8 / 3.7 / 3.6 Flash, Grok 4.7 / 4.6. Önce JetBrains hesabıyla giriş gerekir: Ajanlar panelinde **Giriş yap** tarayıcıyı açar. Abonelik yoksa yalnızca Junie Lite çalışır. |
+| **Groq** | Groq'un OpenAI-uyumlu API'si (LPU), kendi API anahtarınla (`data/groq.json` ya da `GROQ_API_KEY`) | Ücretsiz planın sohbet modelleri: Qwen 3.8 27B, GPT-OSS 120B / 20B… Çok hızlı. Ücretsiz plan: günde 1.000 istek, dakikada 8.000 token. Gerçek araç çağırır; dosyalara Ortak'ın "elleri" ile dokunur. |
+| **OpenRouter** | OpenRouter'ın OpenAI-uyumlu API'si, kendi API anahtarınla (`data/openrouter.json` ya da `OPENROUTER_API_KEY`) | Yalnızca **ücretsiz** modeller (`:free`, `openrouter/free`); ücretli modeller listelenmez ve reddedilir. Araç destekleyen modeller gerçek araç çağırır; dosyalara Ortak'ın "elleri" ile dokunur. |
 | **EVREN** | EVREN LLM Gateway'in OpenAI-uyumlu API'si (evren.ssyz.org.tr), kendi API anahtarınla | Anahtarının erişebildiği tüm sohbet modelleri (`/v1/models`'tan canlı okunur, sağlayıcıya göre gruplanır; düşünme düzeyi destekleyenler düzeyleriyle). Sadece metinle konuşur (Gemini web gibi): dosyalara Ortak'ın "elleri" ile dokunur. Kota ve kredi Ajanlar panelinde görünür. |
 
 Uzun model listeleri seçicide gruplanır (Ücretsiz, Anthropic, OpenAI…). Ajanlar panelindeki **Giriş yap** /

@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AbortError, truncate } from './base.js';
 import { dataDir } from '../settings.js';
+import { chatTurn, forSaving, toolsKnownUnsupported } from './openai-chat.js';
 
 const BASE = (process.env.EVREN_BASE_URL || 'https://evren-llmapi.ssyz.org.tr/v1').replace(/\/+$/, '');
 const KEY_FILE = path.join(dataDir, 'evren.json');
@@ -173,29 +174,21 @@ function saveSession(id, data) {
 // ---- streaming ------------------------------------------------------------------------------
 
 /** Read an OpenAI-style SSE body, calling onData(obj) for every `data:` JSON line. */
-async function readSse(res, onData) {
-  const decoder = new TextDecoder();
-  let buf = '';
-  for await (const chunk of res.body) {
-    buf += decoder.decode(chunk, { stream: true });
-    let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).replace(/\r$/, '');
-      buf = buf.slice(i + 1);
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === '[DONE]') continue;
-      let obj;
-      try { obj = JSON.parse(payload); } catch { continue; }
-      onData(obj);
-    }
-  }
-}
 
 export default {
   id: 'evren',
   name: 'EVREN',
-  capabilities: { edit: false, resume: true, streaming: true, cwd: false, sandbox: true, images: true },
+  capabilities: { edit: false, tools: true, resume: true, streaming: true, cwd: false, sandbox: true, images: true },
+
+  /** The gateway publishes capabilities.tools per model ("auto" has none); unknown → try. */
+  async supportsTools(model) {
+    let id = String(model || '').split('::')[0];
+    const list = await fetchModels().catch(() => []);
+    if (!id || id === 'default') id = sortModels(list)[0]?.id || '';
+    if (toolsKnownUnsupported('evren', id) === false) return false;
+    const caps = list.find((m) => m.id === id)?.capabilities;
+    return typeof caps?.tools === 'boolean' ? caps.tools : undefined;
+  },
 
   async detect() {
     if (!apiKey()) return { available: false, reason: NO_KEY };
@@ -256,7 +249,7 @@ export default {
     }
   },
 
-  async run({ prompt, model, sessionId, system, images = [], signal, onEvent = () => {} }) {
+  async run({ prompt, model, sessionId, system, tools, images = [], signal, onEvent = () => {} }) {
     const emit = (e) => { try { onEvent(e); } catch { /* listener error */ } };
     if (signal?.aborted) throw new AbortError();
 
@@ -292,56 +285,21 @@ export default {
       }
       messages.push({ role: 'user', content });
 
-      emit({ type: 'status', text: `EVREN: ${id.split('/').pop()}${effort ? ` (${effort})` : ''}` });
-      const res = await request('/chat/completions', {
-        method: 'POST',
-        signal,
+      emit({ type: 'status', text: `EVREN: ${id.split('/').pop()}${effort ? ` (${effort})` : ''}${tools ? ' · araçlarla' : ''}` });
+      const out = await chatTurn({
+        adapter: 'evren', label: 'EVREN', request, describe, signal, emit, tools, messages,
+        fail: (message, extra) => new EvrenError(message, extra),
+        body: { model: id, ...(effort ? { reasoning_effort: effort } : {}) },
         timeoutMs: TURN_TIMEOUT_MS,
-        body: {
-          model: id,
-          messages,
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(effort ? { reasoning_effort: effort } : {}),
-        },
       });
-
-      let text = '';
-      let thinking = '';
-      let usage = null;
-      let finish = null;
-      try {
-        await readSse(res, (obj) => {
-          if (obj.error) throw new EvrenError(describe(obj.error.status || 500, obj));
-          if (obj.usage) {
-            usage = {
-              inputTokens: obj.usage.prompt_tokens,
-              outputTokens: obj.usage.completion_tokens,
-            };
-          }
-          const choice = obj.choices?.[0];
-          if (!choice) return;
-          const d = choice.delta || {};
-          const r = d.reasoning_content ?? d.reasoning;
-          if (typeof r === 'string' && r) thinking += r;
-          if (typeof d.content === 'string' && d.content) {
-            if (thinking) { emit({ type: 'thinking', text: thinking }); thinking = ''; }
-            text += d.content;
-            emit({ type: 'text-delta', text: d.content });
-          }
-          if (choice.finish_reason) finish = choice.finish_reason;
-        });
-      } catch (err) {
-        if (signal?.aborted) throw new AbortError();
-        throw err instanceof EvrenError ? err : new EvrenError(`EVREN bağlantı hatası: akış kesildi (${err?.message || err})`);
-      }
-      if (thinking) emit({ type: 'thinking', text: thinking });
-      text = text.trim();
+      let { text, finish } = out;
+      const { usage } = out;
+      if (!text && out.toolSteps) text = '(Araçlarla çalıştı; ayrıca bir açıklama yazmadı.)';
       if (!text) throw new EvrenError('EVREN boş cevap döndü.');
       if (finish === 'length') text += '\n\n_(Cevap uzunluk sınırında kesildi.)_';
 
       messages.push({ role: 'assistant', content: text });
-      const keep = messages.filter((m) => m.role !== 'system').map((m) => (Array.isArray(m.content)
+      const keep = forSaving(messages).map((m) => (Array.isArray(m.content)
         ? { ...m, content: `${m.content.find((x) => x.type === 'text')?.text || ''}\n\n[${m.content.length - 1} resim eklenmişti]` }
         : m));
       saveSession(sid, { model: modelId, updatedAt: new Date().toISOString(), messages: keep });
@@ -352,6 +310,7 @@ export default {
       return { text, sessionId: sid, ...(usage ? { usage } : {}) };
     } catch (err) {
       if (err?.name === 'AbortError' || signal?.aborted) throw new AbortError();
+      if (err?.code === 'tools_unsupported') throw err;
       const message = err?.message || String(err);
       emit({ type: 'error', message });
       throw new Error(message);

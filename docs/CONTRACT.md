@@ -70,7 +70,12 @@ Each adapter module `export default` an object:
     sandbox: true,              // permission levels are enforced by the CLI itself (false = only guarded; UI warns)
     localProcess: true,         // each turn starts a local CLI process: counts toward the maxConcurrent gate
     editShell: false,           // optional: in 'edit' mode the agent cannot run commands (Claude Code on Windows); lead mode tells the lead
+    tools: true,                // optional, API agents: accepts `run({ tools })` (real function calling, see below)
   },
+
+  // Optional, with capabilities.tools: false = this model can't take tools (text protocol instead);
+  // undefined = unknown (try; a rejection fails the first request with err.code 'tools_unsupported').
+  supportsTools(model) -> boolean | undefined | Promise<…>,
 
   // Optional: launch the agent's desktop app. POST /api/agents/:id/start. /api/agents reports `startable`.
   async start() -> { ok: boolean, already?: boolean, reason?: string },
@@ -115,6 +120,7 @@ Each adapter module `export default` an object:
 | `system`     | string \| undefined                    | extra instructions appended to the agent's system prompt (or prepended to prompt if unsupported) |
 | `signal`     | AbortSignal                            | abort => kill the process tree, reject with `AbortError` |
 | `onEvent`    | (AdapterEvent) => void                 | stream of normalized events |
+| `tools`      | `{ defs, exec }` | undefined          | `capabilities.tools` only: OpenAI-style function `defs`; for each call the model makes the adapter awaits `exec(name, args)` → result text, sends it back and repeats until the model answers in text (adapters/openai-chat.js). The orchestrator (textcoder.js) decides what the tools do. |
 
 Permission mapping (adapters must implement it as faithfully as the CLI allows):
 - `read-only` — may read files, must not write or run mutating commands (brainstorm, planning, review).

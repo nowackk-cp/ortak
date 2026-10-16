@@ -349,6 +349,44 @@ export function textChatFollow({ files, dirs, ran = [], found = [], results, cur
   return `${parts.join('\n\n')}\n\nDevam et: gerekirse başka dosya iste ya da uygulanamayan blokları düzeltip yeniden ver; işin bittiyse kullanıcıya ne yaptığını anlat.`;
 }
 
+// ---- API agents with real function calling (textcoder.js nativeTurn) -------------------------
+
+function nativeToolRules(permission) {
+  const readOnly = permission === 'read-only';
+  return 'Proje dosyalarına doğrudan erişimin yok; Ortak sana araçlar veriyor ve çağırdığın araçları senin yerine çalıştırıyor:\n' +
+    '- list_dir: klasörün içeriği. read_file: dosya okur; büyük dosyada start_line/end_line ile yalnızca gereken kısmı iste.\n' +
+    '- grep: tüm projede (ya da bir klasörde) arar. Bir şeyin nerede tanımlandığını/kullanıldığını bulmak için dosyaları tek tek okumak yerine bunu kullan.\n' +
+    `- run_command: proje klasöründe bir ${shell().name} komutu çalıştırır ve çıktısını çıkış koduyla verir (en fazla ${COMMAND_TIMEOUT_MS / 1000} sn; ` +
+    'sunucu/izleme gibi bitmeyen ya da soru soran komut kullanma).\n' +
+    (readOnly
+      ? '- Bu çalışma SALT OKUNUR: dosya değiştiremezsin, yalnızca hiçbir şeyi değiştirmeyen komutlar çalışır. Değişiklikleri öneri olarak anlat.\n'
+      : '- edit_file: dosyada old_text\'i new_text ile değiştirir (old_text dosyada birebir ve tek bir kez geçmeli: önce dosyayı oku, birkaç satır bağlam ekle). ' +
+        'write_file: yeni dosya oluşturur ya da bir dosyayı baştan yazar.\n') +
+    (permission === 'edit' ? '- Yasak komutlar (çalıştırılmaz): git commit/push/reset/checkout, global paket kurulumu, paket yayınlama, klasör silme, sistem komutları.\n' : '') +
+    'Araçları gerektiği kadar çağır; cevabı uydurma, önce dosyayı oku. Kod değiştirdiysen uygunsa testleri/derlemeyi run_command ile çalıştırıp doğrula.';
+}
+
+export function nativeChatSystem(permission) {
+  return `Kullanıcıyla bir yazılım projesi üzerinde Claude Code gibi sohbet ederek çalışıyorsun. ${nativeToolRules(permission)}\n` +
+    `İşin bitince kullanıcıya ne yaptığını kısaca anlat. ${LANG}`;
+}
+
+export function nativeCoderSystem(permission) {
+  return `Bir yazılım ekibinde çalışansın. ${nativeToolRules(permission)}\n${LANG}`;
+}
+
+export function nativeCoderTask({ goal, task, listing, attached, readOnly, leadName }) {
+  const list = listing.files.join('\n') + (listing.more ? `\n… ve ${listing.more} dosya daha` : '');
+  return `${leadName ? `Yöneticin (${leadName}) sana bir görev verdi.\n\n` : ''}` +
+    `Genel hedef (kullanıcının isteği):\n${goal}\n\nSenin görevin:\n${task}\n\n` +
+    `Projedeki dosyalar:\n\`\`\`\n${list || '(boş)'}\n\`\`\`\n\n` +
+    (attached.length ? `İlgili dosyalar:\n\n${fileBlocks(attached)}\n\n` : '') +
+    (readOnly
+      ? 'Bu çalışma salt okunur: dosyaları değiştiremezsin. Gerekirse dosyaları okuyup görevi cevapla (analiz, öneri, inceleme). '
+      : 'Değişiklikleri edit_file / write_file araçlarıyla doğrudan yap. ') +
+    SUMMARY_LINE;
+}
+
 /** User-attached files folded into the message text the agents see. */
 export function withAttachments(text, files, images = []) {
   let out = text;

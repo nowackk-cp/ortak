@@ -49,6 +49,8 @@ RUN:  npm test             terminalde çalıştır (PowerShell / sh)
 
 Modelin verdiği değişiklik blokları dosyaya uygulanır ve sonucu modele geri gönderilir. Model de Codex gibi çalışır: okur, düzeltir, test eder, tekrar dener.
 
+> 🛠️ **Gerçek araç çağırma.** Groq, OpenRouter ve EVREN'deki modellerin çoğu *function calling* destekler; Cline ya da Kilo gibi araçlar DeepSeek'i de bu yöntemle kullanır. Bu modellere Ortak aynı elleri gerçek araçlar olarak verir: `list_dir`, `read_file`, `grep`, `run_command`, `edit_file`, `write_file`. Araç desteklemeyen bir model seçilirse Ortak bunu kendisi fark eder ve yukarıdaki yazı komutlarına geçer.
+
 <details>
 <summary><b>▸ Perde arkası: bir tur nasıl dönüyor?</b></summary>
 
