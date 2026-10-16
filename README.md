@@ -7,10 +7,10 @@
 <img alt="Bağımlılık yok" src="https://img.shields.io/badge/npm%20paketi-0-a371f7?style=flat-square">
 <img alt="Derleme yok" src="https://img.shields.io/badge/derleme%20ad%C4%B1m%C4%B1-yok-58a6ff?style=flat-square">
 <img alt="Yerel" src="https://img.shields.io/badge/çalışır-127.0.0.1-f778ba?style=flat-square">
-<img alt="Ajan sayısı" src="https://img.shields.io/badge/ajan-9-ffa657?style=flat-square">
+<img alt="Ajan sayısı" src="https://img.shields.io/badge/ajan-11-ffa657?style=flat-square">
 </p>
 
-**Claude Code · Codex · Gemini · Antigravity · Copilot · OpenCode · Kilo · Junie · EVREN**<br>
+**Claude Code · Codex · Gemini · Antigravity · Copilot · OpenCode · Kilo · Junie · EVREN · Groq · OpenRouter**<br>
 Hepsi zaten bilgisayarında. Ortak onları **aynı masaya oturtur**: konuşturur, tartıştırır, işi bölüştürür.
 
 </div>
@@ -27,6 +27,7 @@ Hepsi zaten bilgisayarında. Ortak onları **aynı masaya oturtur**: konuşturur
 | 🧭 | [**2. Yönetici ve ekibi**](#-bölüm-2--yönetici-ve-ekibi) | Opus işi böler, üç ajan paralel çalışır. |
 | 💬 | [**3. Tartışan yapay zekâlar**](#-bölüm-3--tartışan-yapay-zekâlar) | Ajanlar `@` ile birbirine laf atar, uzlaşır. |
 | ⚡ | [**4. Aynı iş, üç çözüm**](#-bölüm-4--aynı-iş-üç-çözüm) | Üç ajan yarışır, beğendiğini tek tıkla alırsın. |
+| 👥 | [**5. Planla, uygula, denetle**](#-bölüm-5--planla-uygula-denetle) | Codex planlar, altı çalışan sırayla uygular, Argon denetler. |
 | 🧩 | [**Hangi mod bana göre?**](#-hangi-mod-bana-göre) | Üç soruluk mini test. |
 | 🚀 | [**60 saniyede kurulum**](#-60-saniyede-kurulum) | `npm start` ve hepsi bu. |
 
@@ -36,7 +37,7 @@ Hepsi zaten bilgisayarında. Ortak onları **aynı masaya oturtur**: konuşturur
 
 <img src="docs/media/sahne-eller.svg" alt="Gemini 4 Argon, GREP ile arar, READ ile 21 satır okur, düzeltir ve RUN ile testleri çalıştırır" width="100%">
 
-Gemini web'deki **4 Argon** ya da **EVREN** gibi API modelleri yalnızca yazı yazabilir; dosya açamaz, komut çalıştıramaz.
+Gemini web'deki **4 Argon** ya da **EVREN**, **Groq**, **OpenRouter** gibi API modelleri yalnızca yazı yazabilir; dosya açamaz, komut çalıştıramaz.
 Ortak bu modellerin cevabında birkaç basit komut arar ve hepsini **kendisi yapar**:
 
 ```text
@@ -119,6 +120,33 @@ Diff'leri yan yana karşılaştırırsın, beğendiğini **Bunu uygula** ile al�
 
 ---
 
+## 👥 Bölüm 5 — Planla, uygula, denetle
+
+<img src="docs/media/sahne-takim.svg" alt="Codex planlar, altı çalışan adımları sırayla uygular, Gemini 4 Argon denetler ve bir düzeltme turu ister" width="100%">
+
+**Takım** modu bir iş akışıdır. Üç rol var:
+- **Planlayıcı** görevi adımlara böler.
+- **Çalışanlar** adımları sırayla, dönüşümlü olarak uygular.
+- **Denetçi** sonucu inceler. Eksik görürse bir **düzeltme turu** ister ve son bir kez kontrol eder.
+
+Her role istediğin ajanı ve modeli koyabilirsin; ücretli ve ücretsiz modeller karışık olabilir. Kendi aracı olmayan modeller (Groq, EVREN, OpenRouter, Gemini web) çalışan olarak da iş görür, çünkü dosya ve terminal işlerini onların yerine Ortak yapar.
+
+<details>
+<summary><b>▸ Takım mı, Yönetici mi?</b></summary>
+
+<br>
+
+| | Takım | Yönetici |
+|---|---|---|
+| Plan | Bir kez yapılır, sabit kalır | Yönetici iş sürerken planı değiştirebilir |
+| Sıra | Adımlar **sırayla** uygulanır | Bağımsız işler **paralel**, bağımlı olanlar arkadan |
+| Denetim | Sonda tek denetçi + bir düzeltme turu | Yönetici her raporu ayrı ayrı denetler |
+| En uygun iş | Adımları belli, düz ilerleyen işler | Büyük, dallı budaklı işler |
+
+</details>
+
+---
+
 ## 🧩 Hangi mod bana göre?
 
 <details>
@@ -159,6 +187,8 @@ Her ajan **kendi aboneliğinle, kendi limitinle** çalışır; Ortak yalnızca o
 | ⚪ | **GitHub Copilot** | `copilot` CLI | Copilot Free ile de çalışır |
 | 🟢 | **Junie** | `junie` | Junie Lite ücretsiz |
 | 🔴 | **EVREN** | OpenAI uyumlu API | Kendi API anahtarınla · *Ortak'ın elleriyle* |
+| 🟥 | **Groq** | LPU üzerinde OpenAI uyumlu API | Çok hızlı; ücretsiz planda günde 1.000 istek · *Ortak'ın elleriyle* |
+| ⬜ | **OpenRouter** | OpenAI uyumlu API | Yalnızca **ücretsiz** (`:free`) modeller; ücretlileri kullanmaz · *Ortak'ın elleriyle* |
 
 <details>
 <summary><b>▸ Mimari: hepsi nasıl bağlanıyor?</b></summary>
@@ -172,7 +202,7 @@ flowchart LR
     O --> A1["CLI ajanları<br/>Claude · Codex · OpenCode<br/>Kilo · Copilot · Junie"]
     O --> A2["Yerel sunucu<br/>Antigravity"]
     O --> T["🤲 Ortak'ın elleri<br/>LIST · READ · GREP · RUN · ✎"]
-    T --> A3["Yalnızca yazı yazan modeller<br/>Gemini web · EVREN"]
+    T --> A3["Yalnızca yazı yazan modeller<br/>Gemini web · EVREN · Groq · OpenRouter"]
 ```
 
 Yeni bir ajan eklemek için `server/adapters/` altına bir adaptör yazmak yeterli. Ayrıntılar [docs/CONTRACT.md](docs/CONTRACT.md) dosyasında.

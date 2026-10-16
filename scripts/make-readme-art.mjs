@@ -14,7 +14,7 @@ const C = {
   bg: '#0d1117', panel: '#161b22', line: '#30363d', soft: '#21262d', text: '#e6edf3', muted: '#8b949e',
   green: '#3fb950', red: '#f85149', blue: '#58a6ff', yellow: '#d29922',
   claude: '#d97757', codex: '#10a37f', gemini: '#4f8df9', ag: '#a371f7', copilot: '#e6edf3',
-  opencode: '#e3b341', kilo: '#f0883e', junie: '#21d789', evren: '#ff7b72',
+  opencode: '#e3b341', kilo: '#f0883e', junie: '#21d789', evren: '#ff7b72', groq: '#f55036', openrouter: '#94a3b8',
 };
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 // Yaklaşık metin genişliği (balonları boyutlamak için).
@@ -100,20 +100,20 @@ const avatar = (x, y, color, letter, r = 13) =>
 
 // ---------------------------------------------------------------- hero
 function hero() {
-  const s = new Scene(9);
-  const W = 960, H = 340, hx = 712, hy = 172, rx = 178, ry = 118;
+  const W = 960, H = 340, hx = 700, hy = 172, rx = 195, ry = 125;
   const agents = [
     ['Claude Code', C.claude], ['Codex', C.codex], ['Gemini', C.gemini], ['Antigravity', C.ag], ['Copilot', C.copilot],
-    ['OpenCode', C.opencode], ['Kilo', C.kilo], ['Junie', C.junie], ['EVREN', C.evren],
+    ['OpenCode', C.opencode], ['Kilo', C.kilo], ['Junie', C.junie], ['EVREN', C.evren], ['Groq', C.groq], ['OpenRouter', C.openrouter],
   ];
+  const N = agents.length, s = new Scene(N);
   let lines = '', nodes = '', packets = '';
   agents.forEach(([name, color], i) => {
     const a = -Math.PI / 2 + (i / agents.length) * Math.PI * 2;
     const x = hx + Math.cos(a) * rx, y = hy + Math.sin(a) * ry;
     const pw = sansW(name, 12) + 26;
     lines += `<path d="M${hx} ${hy} L${x.toFixed(1)} ${y.toFixed(1)}" stroke="${color}" stroke-opacity=".45" stroke-width="1.5" fill="none" class="flow"/>`;
-    const k0 = ((i + 0.05) / 9).toFixed(3), k1 = ((i + 0.95) / 9).toFixed(3);
-    packets += `<circle r="4" fill="${color}"><animateMotion dur="9s" repeatCount="indefinite" path="M${hx} ${hy} L${x.toFixed(1)} ${y.toFixed(1)}" keyPoints="0;0;1;1" keyTimes="0;${k0};${k1};1" calcMode="linear"/><animate attributeName="opacity" dur="9s" repeatCount="indefinite" values="0;1;0" keyTimes="0;${k0};${k1}" calcMode="discrete"/></circle>`;
+    const k0 = ((i + 0.05) / N).toFixed(3), k1 = ((i + 0.95) / N).toFixed(3);
+    packets += `<circle r="4" fill="${color}"><animateMotion dur="${N}s" repeatCount="indefinite" path="M${hx} ${hy} L${x.toFixed(1)} ${y.toFixed(1)}" keyPoints="0;0;1;1" keyTimes="0;${k0};${k1};1" calcMode="linear"/><animate attributeName="opacity" dur="${N}s" repeatCount="indefinite" values="0;1;0" keyTimes="0;${k0};${k1}" calcMode="discrete"/></circle>`;
     nodes += `<g transform="translate(${(x - pw / 2).toFixed(1)} ${(y - 14).toFixed(1)})">
 <rect width="${pw.toFixed(1)}" height="28" rx="14" fill="${C.panel}" stroke="${color}" stroke-opacity=".7"/>
 <rect width="${pw.toFixed(1)}" height="28" rx="14" fill="${color}" fill-opacity=".22" ${s.show(i + 0.8, { until: i + 1.6, dy: 0 })}/>
@@ -307,6 +307,62 @@ ${out}
     { title: 'Ortak — Kod · Paralel mod' });
 }
 
-const files = { 'hero.svg': hero(), 'sahne-eller.svg': hands(), 'sahne-yonetici.svg': lead(), 'sahne-grup.svg': group(), 'sahne-paralel.svg': parallel() };
+// ---------------------------------------------------------------- sahne 5: takım
+function team() {
+  const s = new Scene(19);
+  const W = 960, H = 520, X = 110, RW = 740;
+  const steps = [
+    ['Veri modelini çıkar', 'OpenCode', 'DeepSeek V4.1 Flash', C.opencode],
+    ['API katmanını yaz', 'Kilo', 'Otomatik (ücretsiz)', C.kilo],
+    ['Form doğrulaması', 'Copilot', 'Otomatik', C.copilot],
+    ['Arayüz bileşenleri', 'Antigravity', 'Gemini 3.8 Flash', C.ag],
+    ['Birim testleri', 'Groq', 'Qwen 3.8 27B', C.groq, true],
+    ['Belgeler', 'EVREN', 'mimo-v2.6-pro', C.evren, true],
+  ];
+  const T0 = 3.2, STEP = 1.35, FIX = 13.9, FIXED = 15.4;
+  const spinner = (x, y, cls) => `<g transform="translate(${x} ${y})"><g ${cls}><circle cx="7" cy="7" r="6" fill="none" stroke="${C.muted}" stroke-width="2" stroke-dasharray="20 18" class="spin"/></g></g>`;
+  const check = (x, y, cls) => `<text x="${x}" y="${y}" font-size="15" font-weight="700" fill="${C.green}" ${cls}>✓</text>`;
+  let rows = '';
+  steps.forEach(([title, agent, model, color, hands], i) => {
+    const y = 148 + i * 44, t = T0 + i * STEP, done = t + STEP - 0.15;
+    const chip = `${agent} · ${model}`;
+    const cw = sansW(chip, 12) + 30;
+    const isFix = i === 4;
+    rows += `<g transform="translate(${X} ${y})"><g ${s.show(t - 0.3)}>
+<rect width="${RW}" height="36" rx="9" fill="${C.panel}" stroke="${C.line}"/>
+<circle cx="20" cy="18" r="11" fill="${C.soft}" stroke="${C.line}"/><text x="20" y="22.5" text-anchor="middle" font-size="12" font-weight="700">${i + 1}</text>
+<text x="42" y="23" font-size="14">${esc(title)}</text>
+${hands ? `<text x="232" y="23" font-size="11.5" fill="#d2a8ff">🤲 Ortak'ın elleriyle</text>` : ''}
+<g transform="translate(${RW - 52 - cw} 6)"><rect width="${cw}" height="24" rx="12" fill="${C.bg}" stroke="${color}" stroke-opacity=".7"/>
+<circle cx="13" cy="12" r="4" fill="${color}"/><text x="23" y="16.5" font-size="12">${esc(chip)}</text></g>
+${spinner(RW - 36, 11, s.show(t, { until: done, dy: 0 }))}
+${check(RW - 33, 24, s.show(done, isFix ? { until: FIX, dy: 0 } : { dy: 0 }))}
+${isFix ? `${spinner(RW - 36, 11, s.show(FIX + 0.2, { until: FIXED, dy: 0 }))}${check(RW - 33, 24, s.show(FIXED, { dy: 0 }))}
+<text x="${RW - 60 - cw}" y="23" font-size="11.5" text-anchor="end" fill="${C.yellow}" ${s.show(FIX + 0.2, { dy: 0 })}>düzeltme turu</text>` : ''}
+</g></g>`;
+  });
+  const afterSteps = T0 + steps.length * STEP;
+  const body = `
+<g transform="translate(230 58)"><rect width="500" height="62" rx="14" fill="#0f2a22" stroke="${C.codex}" stroke-opacity=".8"/>
+${avatar(30, 31, C.codex, 'P', 15)}
+<text x="56" y="26" font-size="14.5" font-weight="700">Planlayıcı · OpenAI Codex <tspan class="muted" font-weight="400">GPT-6.1 Sol</tspan></text>
+<text x="56" y="47" font-size="13" class="muted" ${s.show(0.3, { until: 2.6 })}>Görevi adımlara bölüyor<tspan class="dots"> …</tspan></text>
+<text x="56" y="47" font-size="13" ${s.show(2.8)}><tspan fill="${C.yellow}">Plan:</tspan> 6 adım · çalışanlara sırayla dağıtıldı</text></g>
+<path d="M480 120 L480 146" stroke="${C.codex}" stroke-opacity=".6" stroke-width="1.5" class="flow" ${s.show(2.8, { dy: 0 })}/>
+${rows}
+<path d="M480 412 L480 430" stroke="${C.gemini}" stroke-opacity=".6" stroke-width="1.5" class="flow" ${s.show(afterSteps, { dy: 0 })}/>
+<path d="M730 452 C900 452 900 342 ${X + RW - 4} 342" stroke="${C.yellow}" stroke-width="1.6" fill="none" class="flow" ${s.show(FIX, { until: FIXED, dy: 0 })}/>
+<g transform="translate(230 430)"><g ${s.show(afterSteps)}>
+<rect width="500" height="62" rx="14" fill="#141d33" stroke="${C.gemini}" stroke-opacity=".8"/>
+${avatar(30, 31, 'url(#argon)', 'D', 15)}
+<text x="56" y="26" font-size="14.5" font-weight="700">Denetçi · Gemini 4 Argon <tspan class="muted" font-weight="400">yüksek düşünme</tspan></text>
+<text x="56" y="47" font-size="13" class="muted" ${s.show(afterSteps + 0.1, { until: FIX - 1.1 })}>Diff'i inceliyor<tspan class="dots"> …</tspan></text>
+<text x="56" y="47" font-size="13" ${s.show(FIX - 0.9, { until: FIXED + 0.3 })}><tspan fill="${C.yellow}">Düzeltme istedi:</tspan> testlerde boş liste durumu eksik</text>
+<text x="56" y="47" font-size="13" ${s.show(FIXED + 0.5)}><tspan fill="${C.green}" font-weight="700">✓ Onaylandı</tspan> — 6 adım · 1 düzeltme turu</text></g></g>`;
+  return svg(W, H, 'Sahne: Takım modu — Codex planlar, altı çalışan adımları sırayla uygular, Gemini 4 Argon denetler', body, s,
+    { title: 'Ortak — Kod · Takım modu · Tam yetki' });
+}
+
+const files = { 'sahne-takim.svg': team(), 'hero.svg': hero(),'sahne-eller.svg': hands(), 'sahne-yonetici.svg': lead(), 'sahne-grup.svg': group(), 'sahne-paralel.svg': parallel() };
 for (const [name, content] of Object.entries(files)) writeFileSync(path.join(OUT, name), content);
 console.log(Object.keys(files).map((f) => `docs/media/${f}`).join('\n'));
