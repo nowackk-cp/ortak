@@ -28,7 +28,7 @@ Her arayüz kendi seçtiğin modu ve ayarlarını hatırlar. Geçmişten bir ça
 | **Grup Sohbeti** | Modeller tek bir ortak sohbette sırayla konuşur ve birbirleriyle gerçekten tartışır: `@codex` gibi birbirine hitap eder, soru sorar, itiraz eder. Anılan ajan sıradaki konuşmacı olur; ama iki ajan birbirini anıp dursa bile kimse bir turdan uzun bekletilmez. Her katılımcı uzlaşınca (`[UZLAŞI]`) ya da tur sınırında durur; sen istediğin an yazıp araya girersin, `@ad` ile birine doğrudan sorabilirsin. |
 | **Beyin Fırtınası** | Seçtiğin modeller soruyu önce bağımsız cevaplar, sonra birbirinin cevabını görüp eleştirir ve geliştirir (1–4 tur). Moderatör sonunda ortak noktaları, ayrışmaları ve önerilen yolu özetler. Sonradan yazdığın mesaj yeni bir tur başlatır. |
 | **Paralel** | Aynı görevi birden çok ajan, her biri kendi `git worktree`'sinde aynı anda yapar. Diff'leri yan yana görür, beğendiğini **Bunu uygula** ile projene uygularsın. |
-| **Takım** | Bir ajan planlar, diğerleri adımları sırayla uygular, bir başkası inceler (gerekirse bir düzeltme turu). Örn. Claude planlar → Codex yazar → Antigravity inceler. |
+| **Takım** | Bir ajan planlar, diğerleri adımları sırayla uygular, bir başkası inceler; sorun bulursa onay verene kadar düzeltme turları yapılır (varsayılan en fazla 3). Limit dolarsa durur, `devam et` ile kaldığı yerden sürer. Örn. Claude planlar → Codex yazar → Antigravity inceler. |
 
 Aynı ajanı farklı modellerle birden çok kez ekleyebilirsin (örn. Claude Opus + Claude Haiku).
 

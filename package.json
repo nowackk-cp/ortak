@@ -9,6 +9,7 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "mock": "node server/index.js --mock",
+    "test": "node --test \"test/*.test.js\"",
     "ac": "node scripts/launch.mjs",
     "durdur": "node scripts/stop.mjs",
     "kisayol": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-shortcuts.ps1",

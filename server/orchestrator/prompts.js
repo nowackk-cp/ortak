@@ -14,7 +14,9 @@ export function labelled(items, max = ANSWER_MAX) {
   return items.map((it) => `### ${it.title}\n${clip(String(it.text || '').trim() || '(boş cevap)', max)}`).join('\n\n');
 }
 
+/** A raw diff (head-cut at DIFF_MAX) or a prepared view from diffview.reviewDiff() ({ text }). */
 function diffBlock(diff) {
+  if (diff && typeof diff === 'object') return diff.text;
   if (diff == null) return '(Proje bir git deposu değil; diff yok. Gerekirse dosyaları doğrudan oku.)';
   if (!String(diff).trim()) return '(Hiçbir dosya değişmedi.)';
   return '```diff\n' + clip(diff, DIFF_MAX) + '\n```';
@@ -149,8 +151,13 @@ export function parallelFollowFresh(task, lastText, userText) {
 
 export const plannerSystem = `Bir yazılım ekibinin planlayıcısısın. ${LANG} ${READ_ONLY}`;
 
-export function plan(goal) {
-  return `Görev:\n${goal}\n\n` +
+/** Messages the user sent while the run was going (they steer the remaining work). */
+function notesBlock(notes) {
+  return notes?.length ? `Kullanıcının çalışma sırasında eklediği notlar:\n${notes.map((n) => `- ${clip(n, 2000)}`).join('\n')}\n\n` : '';
+}
+
+export function plan(goal, notes) {
+  return `Görev:\n${goal}\n\n${notesBlock(notes)}` +
     'Projeyi gerektiği kadar incele ve görevi sırayla uygulanacak 1–6 adıma böl. Her adım tek bir çalışanın tek ' +
     'seferde yapabileceği somut ve doğrulanabilir bir iş olsun (hangi dosyalar, kabul ölçütü). ' +
     'Cevabının sonunda planı tam olarak şu biçimde tek bir ```json bloğu olarak ver:\n' +
@@ -165,50 +172,69 @@ export function planList(steps) {
 }
 
 function prevSummaries(summaries) {
-  return summaries.length
+  return summaries?.length
     ? summaries.map((s) => `${s.index + 1}. ${s.title} (${s.by}): ${s.summary}`).join('\n')
     : '(henüz yok)';
 }
 
-export function workerStep(goal, steps, index, summaries) {
+/** `retry` = title of the worker that failed this step before (its half-done edits may be there). */
+export function workerStep({ goal, steps, index, summaries, notes, retry }) {
   const s = steps[index];
-  return `Genel hedef:\n${goal}\n\nPlan:\n${planList(steps)}\n\nTamamlanan adımlar:\n${prevSummaries(summaries)}\n\n` +
-    `Senin adımın (${index + 1}/${steps.length}): ${s.title}\n${s.details || ''}\n\nBu adımı şimdi uygula.`;
+  return `Genel hedef:\n${goal}\n\nPlan:\n${planList(steps)}\n\nTamamlanan adımlar:\n${prevSummaries(summaries)}\n\n${notesBlock(notes)}` +
+    `Senin adımın (${index + 1}/${steps.length}): ${s.title}\n${s.details || ''}\n\n` +
+    (retry ? `Not: Bu adımı önce ${retry} denedi ama tamamlayamadı; dosyalarda yarım kalmış değişiklikler olabilir. Önce mevcut durumu kontrol et.\n\n` : '') +
+    'Bu adımı şimdi uygula.';
 }
 
 export const reviewerSystem = `Bir yazılım ekibinin denetçisisin. ${LANG} ${READ_ONLY}`;
 
+const REVIEW_HANDS = 'Diff\'te göremediğin ya da emin olmadığın yerler hakkında tahmin yürütme: ilgili dosyaları oku, gerekirse testleri çalıştır.';
+
 const REVIEW_RULE =
-  'Her şey doğru ve eksiksizse cevabına tam olarak "ONAY" kelimesiyle başla ve kısa bir değerlendirme yaz. ' +
-  'Sorun varsa "ONAY" yazma; sorunları numaralı, somut ve düzeltilebilir bir liste olarak yaz.';
+  'Yalnızca hedefi bozan hataları, eksik kalan işleri ve gerçek riskleri sorun say; üslup tercihlerini ve "olsa iyi olur" ' +
+  'önerilerini sorun sayma (istersen ayrı bir "Öneriler" başlığında yaz). Her sorunu numaralı ve somut yaz: dosya, ilgili yer ' +
+  '(işlev/satır), ne yanlış, nasıl düzeltilmeli. Cevabının EN SON satırına kararını tek başına yaz: her şey doğru ve eksiksizse ' +
+  '"KARAR: ONAY", düzeltilmesi gereken bir sorun varsa "KARAR: DÜZELTME".';
 
-export function review(goal, steps, summaries, diff) {
-  return `Genel hedef:\n${goal}\n\nPlan:\n${planList(steps)}\n\nAdım özetleri:\n${prevSummaries(summaries)}\n\n` +
-    `Yapılan değişiklikler:\n${diffBlock(diff)}\n\n` +
-    `Değişiklikleri hedefe ve plana göre incele; gerekirse dosyaları oku. ${REVIEW_RULE}`;
+/**
+ * Reviewer prompt. Round 1 reviews the whole work; later rounds check a fix (`fix` = { by, summary })
+ * of `prevIssues`. A resumed reviewer already has the goal, plan and its earlier review in its session.
+ * `request` = the user's follow-up request this review is about.
+ */
+export function review({ goal, steps, summaries, notes, diff, round = 1, prevIssues, fix, request, resumed }) {
+  const parts = [];
+  if (!resumed) {
+    parts.push(`Genel hedef:\n${goal}`, `Plan:\n${planList(steps || [])}`, `Adım özetleri:\n${prevSummaries(summaries)}`);
+    if (notes?.length) parts.push(notesBlock(notes).trim());
+    if (prevIssues) parts.push(`Önceki denetimde bildirilen sorunlar:\n${clip(prevIssues, 6000)}`);
+  }
+  if (request) parts.push(`Kullanıcının ek isteği (bu turda yapıldı):\n${request}`);
+  if (fix) parts.push(`${fix.by} bildirilen sorunlar için düzeltme yaptı: ${fix.summary}`);
+  parts.push(`${fix ? 'Güncel değişiklikler' : 'Yapılan değişiklikler'}:\n${diffBlock(diff)}`);
+  const focus = round > 1
+    ? `Bu ${round}. denetim: önceki turda bildirilen sorunların giderilip giderilmediğini kontrol et; yeni bir sorunu ancak hedefi gerçekten bozuyorsa ekle.`
+    : request ? 'Bu isteğin doğru ve eksiksiz yapıldığını incele.' : 'Değişiklikleri hedefe ve plana göre incele.';
+  parts.push(`${focus} ${REVIEW_HANDS} ${REVIEW_RULE}`);
+  return parts.join('\n\n');
 }
 
-export function fix(goal, reviewText) {
-  return `Genel hedef:\n${goal}\n\nDenetçi şu sorunları buldu:\n${clip(reviewText, 12_000)}\n\n` +
-    `Bu sorunları proje klasöründe düzelt. ${SUMMARY_LINE}`;
+/** The reviewer answered without a KARAR line (often: it ran out of reading rounds). */
+export const reviewVerdictAsk =
+  'Kararını vermedin. İncelemeni bitir ve cevabının en son satırına tek başına "KARAR: ONAY" ya da "KARAR: DÜZELTME" yaz ' +
+  '(DÜZELTME ise üstünde sorunları numaralı liste olarak tekrar yaz).';
+
+export function fix({ goal, steps, summaries, notes, issues, changed, round, maxRounds }) {
+  return `Genel hedef:\n${goal}\n\nPlan:\n${planList(steps || [])}\n\nTamamlanan adımlar:\n${prevSummaries(summaries)}\n\n${notesBlock(notes)}` +
+    `Şu ana kadar değişen dosyalar:\n${changed}\n\n` +
+    `Denetçi şu sorunları buldu (düzeltme turu ${round}/${maxRounds}):\n${clip(issues, 12_000)}\n\n` +
+    'Bu sorunları proje klasöründe düzelt: önce ilgili dosyaları oku, yalnızca bildirilen sorunları düzelt ve başka yerleri ' +
+    `değiştirme. Mümkünse testleri çalıştırıp doğrula. ${SUMMARY_LINE}`;
 }
 
-export function finalReview({ goal, fixSummary, diff, resumed }) {
-  return (resumed ? '' : `Genel hedef:\n${goal}\n\n`) +
-    `Çalışan bulduğun sorunlar için düzeltme yaptı: ${fixSummary}\n\nGüncel değişiklikler:\n${diffBlock(diff)}\n\n` +
-    'Kısa bir son değerlendirme yap. Sorunlar giderildiyse "ONAY" ile başla; kalan sorunları kısaca listele.';
-}
-
-export function teamFollow(goal, steps, lastReview, userText) {
-  return `Genel hedef:\n${goal}\n\nPlan:\n${planList(steps)}\n\n` +
+export function teamFollow({ goal, steps, lastReview, userText, notes }) {
+  return `Genel hedef:\n${goal}\n\nPlan:\n${planList(steps || [])}\n\n${notesBlock(notes)}` +
     (lastReview ? `Denetçinin son değerlendirmesi:\n${clip(lastReview, 6000)}\n\n` : '') +
     `Kullanıcının ek isteği:\n${userText}\n\nBunu proje klasöründe uygula. ${SUMMARY_LINE}`;
-}
-
-export function teamFollowReview({ goal, userText, summary, diff, resumed }) {
-  return (resumed ? '' : `Genel hedef:\n${goal}\n\n`) +
-    `Kullanıcının ek isteği:\n${userText}\n\nÇalışanın özeti: ${summary}\n\nBu istekteki değişiklikler:\n${diffBlock(diff)}\n\n` +
-    `Kısaca incele. ${REVIEW_RULE}`;
 }
 
 // ---- text-only coders (textcoder.js) ----------------------------------------------------------

@@ -129,7 +129,9 @@ Diff'leri yan yana karşılaştırırsın, beğendiğini **Bunu uygula** ile al�
 **Takım** modu bir iş akışıdır. Üç rol var:
 - **Planlayıcı** görevi adımlara böler.
 - **Çalışanlar** adımları sırayla, dönüşümlü olarak uygular.
-- **Denetçi** sonucu inceler. Eksik görürse bir **düzeltme turu** ister ve son bir kez kontrol eder.
+- **Denetçi** sonucu inceler. Eksik görürse **düzeltme turu** ister ve düzeltmeyi yeniden kontrol eder; bu döngü onay verene kadar en fazla 3 tur sürer (ayarlanabilir).
+
+Denetçi değişikliklerin hepsini görür: diff dosya dosya hazırlanır, resim ve kilit dosyaları tek satırla özetlenir, sığmayan dosyalar adıyla bildirilir ve denetçi onları kendisi okur. Limit dolar ya da bağlantı koparsa takım **durur, kaybetmez**: yapılan her adım kaydedilir, `devam et` yazınca kaldığı yerden sürer.
 
 Her role istediğin ajanı ve modeli koyabilirsin; ücretli ve ücretsiz modeller karışık olabilir. Kendi aracı olmayan modeller (Groq, EVREN, OpenRouter, Gemini web) çalışan olarak da iş görür, çünkü dosya ve terminal işlerini onların yerine Ortak yapar.
 
@@ -142,7 +144,7 @@ Her role istediğin ajanı ve modeli koyabilirsin; ücretli ve ücretsiz modelle
 |---|---|---|
 | Plan | Bir kez yapılır, sabit kalır | Yönetici iş sürerken planı değiştirebilir |
 | Sıra | Adımlar **sırayla** uygulanır | Bağımsız işler **paralel**, bağımlı olanlar arkadan |
-| Denetim | Sonda tek denetçi + bir düzeltme turu | Yönetici her raporu ayrı ayrı denetler |
+| Denetim | Sonda denetçi + onaya kadar düzeltme turları | Yönetici her raporu ayrı ayrı denetler |
 | En uygun iş | Adımları belli, düz ilerleyen işler | Büyük, dallı budaklı işler |
 
 </details>

@@ -10,8 +10,9 @@ import * as git from '../git.js';
 import * as P from './prompts.js';
 import { HttpError, clip } from '../util.js';
 import { jsonCandidates } from './json.js';
-import { stripEdits, textCoderTask } from './textcoder.js';
+import { stripEdits, textCoderTask, work } from './textcoder.js';
 import { errorKind, mayBeStaleSession } from '../errors.js';
+import { promptBudget, reviewDiff } from './diffview.js';
 
 const MAX_TASKS_PER_REPLY = 12; // tasks taken from one lead answer
 const MAX_TASKS_TOTAL = 40;     // per lead loop
@@ -134,10 +135,12 @@ export function parseDecision(text) {
 /** The lead's answer without its JSON block (used when it gave no summary). */
 const prose = (text) => String(text || '').replace(/```json[\s\S]*?```/gi, '').trim();
 
+// A lead without file tools of its own (Gemini web, Groq…) reads the project through Ortak's
+// read-only hands (textcoder.work), like a text-only worker.
 async function leadTurn(ctx, prompt) {
   const resumable = ctx.canResume('lead');
   try {
-    return await ctx.turn('lead', { prompt, permission: 'read-only', system: P.leadSystem });
+    return await work(ctx, 'lead', { prompt, permission: 'read-only', system: P.leadSystem });
   } catch (err) {
     // A stale session usually fails at once: start a new one with the goal, team and history
     // recapped. A usage limit, network or sign-in error says nothing about the session: keep it.
@@ -145,7 +148,7 @@ async function leadTurn(ctx, prompt) {
     ctx.note('Yöneticinin önceki oturumu sürdürülemedi; yeni oturum başlatılıyor.', 'warn');
     ctx.lane('lead').sessionId = undefined;
     const recap = P.leadRecap({ goal: ctx.state.goal, workers: teamView(ctx, workerList(ctx)), log: ctx.state.log });
-    return ctx.turn('lead', { prompt: `${recap}${prompt}`, permission: 'read-only', system: P.leadSystem, resume: false });
+    return work(ctx, 'lead', { prompt: `${recap}${prompt}`, permission: 'read-only', system: P.leadSystem, resume: false });
   }
 }
 
@@ -410,7 +413,9 @@ async function drive(ctx, firstPrompt, phaseTitle) {
         kind: 'lead',
         decision: await askLead(ctx, P.leadReport({
           round: rounds, maxRounds, reports, running: runningNow, waiting: waitingNow,
-          diff: d ? d.diff : null, warnings: warns, goal: st.goal, resumed: ctx.canResume('lead'),
+          // per-file view sized for the lead's model (binary/lockfiles summarized, cut files named)
+          diff: d ? reviewDiff(d.diff, Math.floor(promptBudget(ctx.adapterOf('lead')) * 0.6)) : null,
+          warnings: warns, goal: st.goal, resumed: ctx.canResume('lead'),
         })),
       };
     })().catch((error) => ({ kind: 'lead', error }));

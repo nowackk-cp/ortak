@@ -158,11 +158,14 @@ export class Orchestrator {
       const workers = list(raw.workers, 'worker', false, MAX_WORKERS, 'çalışan');
       const planner = resolve(raw.planner || raw.workers[0], 'planner', false);
       const reviewer = resolve(raw.reviewer || raw.planner || raw.workers[0], 'reviewer', false);
+      const fixRounds = raw.fixRounds == null ? 3 : Math.trunc(Number(raw.fixRounds));
+      if (!Number.isFinite(fixRounds) || fixRounds < 1 || fixRounds > 5) throw badRequest('Düzeltme turu sayısı 1 ile 5 arasında olmalı.');
       entries = [{ ...planner, lane: 'planner' }, ...workers, { ...reviewer, lane: 'reviewer' }];
       Object.assign(config, {
         planner: { agentId: planner.agentId, model: planner.model },
         workers: workers.map(({ agentId, model }) => ({ agentId, model })),
         reviewer: { agentId: reviewer.agentId, model: reviewer.model },
+        fixRounds,
         permission,
       });
       const info = await git.repoInfo(cwd);

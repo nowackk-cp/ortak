@@ -53,11 +53,11 @@ async function allFiles(cwd, max) {
   return files;
 }
 
-/** Project files (git ls-files when possible), relative to cwd, capped. */
-export async function projectListing(cwd) {
-  const files = await allFiles(cwd, LISTING_MAX);
-  const more = files.length > LISTING_MAX ? files.length - LISTING_MAX : 0;
-  return { files: files.slice(0, LISTING_MAX), more };
+/** Project files (git ls-files when possible), relative to cwd, capped at `max`. */
+export async function projectListing(cwd, max = LISTING_MAX) {
+  const files = await allFiles(cwd, max);
+  const more = files.length > max ? files.length - max : 0;
+  return { files: files.slice(0, max), more };
 }
 
 const GREP_FILES_MAX = 20_000;
@@ -721,12 +721,13 @@ export const isTextOnly = (ctx, laneId) => ctx.adapterOf(laneId)?.capabilities?.
 /**
  * Drop-in for ctx.turn() on lanes that should change files (team/parallel workers): agents with
  * their own tools run as usual; text-only agents get Ortak's hands (LIST / READ / SEARCH-REPLACE)
- * in `cwd`. The first turn of a session also gets the project's file list. Resolves { text }.
+ * in `cwd` (read-only: they read, search and run checks but change nothing — reviewers, planners).
+ * The first turn of a session also gets the project's file list (at most `listingMax`). Resolves { text }.
  */
-export async function work(ctx, laneId, { prompt, permission = 'read-only', system, cwd = ctx.meta.cwd, resume = true }) {
+export async function work(ctx, laneId, { prompt, permission = 'read-only', system, cwd = ctx.meta.cwd, resume = true, listingMax = LISTING_MAX }) {
   if (!isTextOnly(ctx, laneId)) return ctx.turn(laneId, { prompt, permission, system, cwd, resume });
   const fresh = !resume || !ctx.canResume(laneId);
-  const body = fresh ? P.textWorkIntro({ listing: await projectListing(cwd), prompt }) : prompt;
+  const body = fresh ? P.textWorkIntro({ listing: await projectListing(cwd, listingMax), prompt }) : prompt;
   return textChatTurn(ctx, laneId, { prompt: body, permission, resume, cwd, system });
 }
 export const _internals = { parseAnswer, replaceOnce, clip };

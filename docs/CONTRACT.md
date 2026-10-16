@@ -252,8 +252,10 @@ turn's system prompt gets `CHAT_SURFACE` (plain conversation, no file/shell tool
 // Paralel: aynı görevi N ajan kendi git worktree'sinde yapar, diff'ler karşılaştırılır, kazanan uygulanır
 { mode: 'parallel', cwd, prompt, participants: [{ agentId, model }], permission }
 
-// Takım: planlayıcı görevi böler -> çalışanlar sırayla uygular -> denetçi inceler (1 düzeltme turu)
-{ mode: 'team', cwd, prompt, planner: { agentId, model }, workers: [{ agentId, model }], reviewer: { agentId, model }, permission }
+// Takım: planlayıcı görevi böler -> çalışanlar sırayla uygular -> denetçi inceler <-> düzeltme (en fazla fixRounds tur, 1-5, varsayılan 3)
+// Denetçi cevabının son satırına "KARAR: ONAY" ya da "KARAR: DÜZELTME" yazar. Aşamalar state'te tutulur (stage: plan|steps|request|review|fix|done);
+// limit/ağ/oturum hatasında çalışma 'waiting' olur, "devam et" kaldığı yerden sürer.
+{ mode: 'team', cwd, prompt, planner: { agentId, model }, workers: [{ agentId, model }], reviewer: { agentId, model }, fixRounds: 3, permission }
 
 // Yönetici: lane 'lead' (salt okunur) bir görev grafiği verir
 //   {"tasks":[{"id":"t1","agent":"<handle>","task":"…","files":["…"],"after":["t0"]}],"done":false}  |  {"tasks":[],"done":true,"summary":"…"}
