@@ -4,6 +4,7 @@ import { h, icon, spinner } from './dom.js';
 import { relTime, resetText, fmtDate, basename, enc, toMs } from './util.js';
 import { RUN_STATUS, modeInfo, runSurface } from './modes.js';
 import { agentTiers, tierBadge } from './agents.js';
+import { agentModels } from './models.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -169,14 +170,13 @@ export function renderAgents(agents, limits, { loaded, loading, starting, onStar
 
   function agentCard(a) {
     const tip = a.available ? `${a.name}${a.version ? ' · ' + a.version : ''} — kullanılabilir` : a.reason || 'Kullanılamıyor';
-    const freeModels = (a.models || []).filter((m) => !m.disabled && m.tier === 'free').length;
     return h('div', { class: `agent${a.available ? ' on' : ' off'}`, title: tip },
       h('div', { class: 'agent-line' },
         h('span', { class: `agent-av spk-${a.id}`, 'aria-hidden': 'true', text: (a.name || a.id).charAt(0).toLocaleUpperCase('tr') }),
         h('span', { class: 'agent-name', text: a.name || a.id }),
         a.available && tierBadge(agentTiers(a)),
         a.version && h('span', { class: 'agent-ver', text: a.version })),
-      a.available && freeModels > 1 && h('div', { class: 'agent-reason', text: `${freeModels} ücretsiz model` }),
+
       h('div', { class: 'agent-tags' },
         a.available && a.capabilities && a.capabilities.edit === false && h('span', { class: 'agent-tag', title: 'Kendi dosya araçları yok: Ortak onun yerine klasörlerde gezer, dosya okur, değişiklikleri uygular ve terminal komutlarını çalıştırır.', text: 'Ortak eli' }),
         a.sleeping && h('span', { class: 'agent-tag agent-sleep', title: 'Kaynak harcamamak için kapalı. İlk turda Ortak kendisi açar (Performans ayarları).' }, icon('moonzz'), 'uykuda')),
@@ -198,6 +198,7 @@ export function renderAgents(agents, limits, { loaded, loading, starting, onStar
         onclick: () => onLogin?.(a.id),
       }, ...(loggingIn?.has(a.id) ? [spinner('sm'), 'Giriş bekleniyor…'] : [icon('key'), a.login.label || 'Giriş yap'])),
       a.available && a.capabilities?.sandbox === false && h('div', { class: 'agent-reason warn-text', text: 'İzinler zorunlu değil; komutlar sandbox’lı değil.' }),
-      a.available && limitsEl(limits?.[a.id]));
+      a.available && limitsEl(limits?.[a.id]),
+      a.available && agentModels(a));
   }
 }

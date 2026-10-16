@@ -4,6 +4,7 @@ import { store, basename, enc } from './util.js';
 import { PERMISSIONS, SURFACE_MODE_IDS, PRIMARY_MODES, BUDGETS, modeInfo } from './modes.js';
 import { catalog, agentPicker, sanitizeSel, usableAgents, defaultModel, getAgent, unusable, tierBadge, modelLabel, agentName } from './agents.js';
 import { api } from './api.js';
+import { catalogView } from './models.js';
 
 const MAX_PARTICIPANTS = 8;
 
@@ -543,7 +544,10 @@ function autoTeamFor(c) {
   const entry = {};
   autoCache.set(key, entry);
   api(`/api/team/auto?budget=${enc(c.budget)}&lead=${enc(c.lead.agentId)}&leadModel=${enc(c.lead.model || '')}`, { quiet: true })
-    .then((r) => { entry.workers = Array.isArray(r?.workers) ? r.workers : []; })
+    .then((r) => {
+      entry.workers = Array.isArray(r?.workers) ? r.workers : [];
+      entry.catalog = Array.isArray(r?.catalog) ? r.catalog : [];
+    })
     .catch(() => { entry.workers = null; autoCache.delete(key); })
     .finally(() => { if (root?.isConnected && mode === 'lead') render(); });
   return entry;
@@ -557,7 +561,7 @@ function teamPreview(c) {
       ? 'Kullanılabilir ücretsiz ajan yok. Ajanlar ve API\'ler penceresinden Groq, OpenRouter ya da Gemini gibi ücretsiz bir ajan bağlayın.'
       : 'Kullanılabilir alt ajan yok.');
   }
-  return h('div', { class: 'team-prev' }, t.workers.map((w) => h('span', {
+  const chips = h('div', { class: 'team-prev' }, t.workers.map((w) => h('span', {
     class: `team-chip${w.backup ? ' backup' : ''}`,
     title: `${w.name} · ${w.modelLabel}${w.backup ? '\nYedek: yalnızca ücretsiz ajanlar başaramazsa kullanılır' : ''}`,
   },
@@ -565,6 +569,21 @@ function teamPreview(c) {
   h('span', { class: 'tc-name' }, h('b', { text: w.name.replace(/\s*\(.*\)$/, '') }), ' ', shortModel(w.agentId, w.model)),
   tierBadge(w.tier),
   w.backup && h('span', { class: 'tc-backup', text: 'yedek' }))));
+  if (!t.catalog?.length) return chips;
+  // every model the lead may add, per app / API (the chips are only the starting team)
+  const team = new Set(t.workers.map((w) => `${w.agentId}:${w.model}`));
+  const providers = t.catalog.map((p) => ({ ...p, models: p.models.map((m) => (team.has(m.ref) ? { ...m, team: true } : m)) }));
+  const { total, el } = catalogView(providers);
+  const key = 'lead.catalogOpen';
+  const box = h('details', { class: 'catalog-card in-setup', open: !!store.get(key, false) },
+    h('summary', {}, icon('chevron', 'prov-chev'),
+      h('b', { text: `Yönetici ${total} model arasından seçer` }),
+      h('span', { class: 'cc-sub', text: providers.map((p) => `${p.name} ${p.models.length}`).join(' · ') })),
+    h('div', { class: 'cc-body' },
+      h('p', { class: 'cc-hint', text: 'Yukarıdakiler başlangıç ekibi. Yönetici her görev için bu listeden işe en uygun modeli seçer; gerekirse aynı modelden birkaç kopya açılır.' }),
+      el));
+  box.addEventListener('toggle', () => store.set(key, box.open));
+  return h('div', {}, chips, box);
 }
 
 function leadSetup(card, c) {

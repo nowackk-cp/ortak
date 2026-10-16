@@ -8,6 +8,7 @@ import { agentName, modelLabel, getAgent, tierBadge, modelTier } from './agents.
 import { MODES, LANE_STATUS, PERMISSIONS, roleLabel, modeInfo } from './modes.js';
 import { fmtInt, fmtCost, fmtDuration, fmtDate, truncate, basename, enc, copyText } from './util.js';
 import { api, toast } from './api.js';
+import { catalogCard } from './models.js';
 
 const TERMINAL = new Set(['done', 'error', 'cancelled']);
 const STALL_MS = 150_000; // no output for this long: the card says the agent may be stuck
@@ -906,6 +907,7 @@ export class RunView {
       case 'user': this.onUser(ev); break;
       case 'dequeue': this.onDequeue(ev); break;
       case 'task': this.onTask(ev); break;
+      case 'catalog': this.place(catalogCard(ev)); break;
       case 'agent': this.onAgent(ev); break;
       case 'diff': this.onDiff(ev); break;
       case 'checkpoint': this.onCheckpoint(ev); break;

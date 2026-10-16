@@ -121,7 +121,12 @@ test('yönetici katalogdan model seçer: meşgul modelin yeni kopyası açılır
   assert.ok(notes(ctx).some((t) => /@pro: Gemini · 4 Argon yerine Gemini · Pro ile çalışacak/.test(t)), notes(ctx).join('\n'));
   assert.deepEqual(ctx.state.handles.map((x) => x.handle).filter((x) => x.startsWith('qwen3')), ['qwen3-coder', 'qwen3-coder-2', 'qwen3-coder-3']);
   assert.ok(ctx.events.some((e) => e.kind === 'lane' && e.lane === 'openrouter#3'));
-  assert.ok(notes(ctx).some((t) => /Yönetici 3 model görüyor; .* aynı anda en fazla 3 görev/.test(t)));
+  const card = ctx.events.find((e) => e.kind === 'catalog');
+  assert.equal(card.parallel, 3);
+  assert.deepEqual(card.providers.map((p) => [p.agentId, p.models.map((m) => `${m.ref}${m.team ? '*' : ''}`)]), [
+    ['openrouter', ['openrouter:qwen/qwen3-coder:free']],
+    ['gemini', ['gemini:argon-high*', 'gemini:pro']],
+  ]);
   const result = ctx.events.find((e) => e.kind === 'result').text;
   assert.match(result, /ücretsiz ajanlar 5 görev/);
   const tasks = ctx.events.filter((e) => e.kind === 'task');

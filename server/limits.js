@@ -1,7 +1,10 @@
 // Agent discovery (detect + listModels) and quota (getLimits) aggregation with caching.
 // Every adapter call runs in parallel with an 8 s timeout; results are cached for 60 s.
+import fs from 'node:fs';
+import path from 'node:path';
 import { loadAdapters } from './adapters/index.js';
 import { modelTier } from './tiers.js';
+import { dataDir } from './settings.js';
 
 const TTL_MS = 60_000;
 const CALL_TIMEOUT_MS = 8_000;
@@ -46,12 +49,47 @@ function normModels(list) {
     }));
 }
 
+// The last model list each agent returned, kept on disk: OpenRouter's or EVREN's catalog can take
+// longer than the probe waits or fail for a moment, and then the agent would show (and the lead
+// would know) only its default model. Its slow request goes on and fills the adapter's own cache.
+const MODELS_FILE = path.join(dataDir, 'models-cache.json');
+let lastModels = null;
+
+function knownModels() {
+  if (lastModels) return lastModels;
+  try { lastModels = JSON.parse(fs.readFileSync(MODELS_FILE, 'utf8')) || {}; } catch { lastModels = {}; }
+  return lastModels;
+}
+
+function rememberModels(id, list) {
+  const all = knownModels();
+  if (JSON.stringify(all[id]) === JSON.stringify(list)) return;
+  all[id] = list;
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(`${MODELS_FILE}.tmp`, JSON.stringify(all));
+    fs.renameSync(`${MODELS_FILE}.tmp`, MODELS_FILE);
+  } catch { /* a cache only */ }
+}
+
 async function probe(a) {
   const [det, mods] = await Promise.allSettled([
     withTimeout(() => a.detect(), CALL_TIMEOUT_MS, `${a.name || a.id} algılama`),
     withTimeout(() => a.listModels(), CALL_TIMEOUT_MS, `${a.name || a.id} model listesi`),
   ]);
   const d = det.status === 'fulfilled' ? det.value || {} : null;
+  let models = mods.status === 'fulfilled' ? normModels(mods.value) : [];
+  let modelsNote = null;
+  // a real list (more than a lone "default") is remembered; an empty or failed one falls back to it
+  if (models.length > 1 || (models.length === 1 && models[0].id !== 'default')) rememberModels(a.id, models);
+  else if (knownModels()[a.id]?.length > models.length) {
+    models = knownModels()[a.id];
+    modelsNote = mods.status === 'rejected'
+      ? `Model listesi şu an alınamadı (${mods.reason?.message || mods.reason}); son bilinen liste gösteriliyor.`
+      : 'Model listesi şu an alınamadı; son bilinen liste gösteriliyor.';
+  } else if (mods.status === 'rejected' && d?.available) {
+    modelsNote = `Model listesi alınamadı: ${mods.reason?.message || mods.reason}`;
+  }
   return {
     id: a.id,
     name: a.name || a.id,
@@ -60,7 +98,8 @@ async function probe(a) {
     reason: d ? (d.available ? null : d.reason || 'Bulunamadı') : (det.reason?.message || String(det.reason)),
     capabilities: { ...DEFAULT_CAPS, ...(a.capabilities || {}) },
     // tier: what the model costs the user (tiers.js) — free / subscription / paid
-    models: mods.status === 'fulfilled' ? normModels(mods.value).map((m) => ({ ...m, tier: modelTier(a.id, m) })) : [],
+    models: models.map((m) => ({ ...m, tier: modelTier(a.id, m) })),
+    ...(modelsNote ? { modelsNote } : {}),
     startable: typeof a.start === 'function',
     // Sign-in from the UI (POST /api/agents/:id/login): required when unavailable for lack of an
     // account, optional when it only unlocks more models.

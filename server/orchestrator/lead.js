@@ -390,11 +390,19 @@ function openMailbox(ctx) {
   return mail;
 }
 
-/** "Yönetici 46 model görüyor: OpenRouter 31 · EVREN 9 · Groq 4 · …" */
-function catalogNote(catalog, parallel) {
-  const n = catalog.reduce((a, p) => a + p.models.length, 0);
-  return `Yönetici ${n} model görüyor; her görev için modeli kendisi seçer, aynı anda en fazla ${parallel} görev çalışır: ` +
-    catalog.map((p) => `${p.name} ${p.models.length}`).join(' · ');
+/**
+ * Every model the lead may use, for the UI (runview: a folded card listing each provider's
+ * models; the starting team's are marked).
+ */
+function catalogEvent({ catalog, parallel, taskMinutes }, workers, budget) {
+  const team = new Set(workers.map((w) => modelRef(w.agentId, w.model)));
+  return {
+    kind: 'catalog', budget: budget || null, parallel, taskMinutes,
+    providers: catalog.map((p) => ({
+      agentId: p.agentId, name: p.name, own: p.own, copies: p.copies, ...(p.slow ? { slow: true } : {}),
+      models: p.models.map((m) => (team.has(m.ref) ? { ...m, team: true } : m)),
+    })),
+  };
 }
 
 /**
@@ -785,9 +793,10 @@ export default {
     if (!ctx.meta.git) ctx.note('Proje bir git deposu değil; yönetici değişiklikleri diff olarak göremeyecek (dosyaları okuyarak denetler).', 'warn');
     await refreshQuota(ctx);
     const workers = teamView(ctx, workerList(ctx));
-    if (ctx.config.autoTeam) ctx.note(teamNote(workers, ctx.config.budget));
     await drive(ctx, (more) => {
-      if (more.catalog.length) ctx.note(catalogNote(more.catalog, more.parallel));
+      // the catalog card lists every model (the team's marked); without one, the team alone
+      if (more.catalog.length) ctx.emit(catalogEvent(more, workers, ctx.config.budget));
+      else if (ctx.config.autoTeam) ctx.note(teamNote(workers, ctx.config.budget));
       return P.leadStart({
         goal: st.goal, workers, readOnly: ctx.config.permission === 'read-only', maxSteps: ctx.config.steps, budget: ctx.config.budget, permission: ctx.config.permission, ...more,
       });

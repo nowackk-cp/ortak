@@ -14,6 +14,7 @@ import { DEFAULTS, getSettings, updateSettings } from './settings.js';
 import { gateStats } from './gate.js';
 import { servedPath } from './attachments.js';
 import { BUDGETS, DEFAULT_BUDGET, autoTeam } from './tiers.js';
+import { buildCatalog } from './catalog.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const WEB = path.join(ROOT, 'web');
@@ -199,7 +200,9 @@ async function api(req, res, url) {
   if (pathname === '/api/team/auto' && method === 'GET') {
     const budget = BUDGETS.includes(searchParams.get('budget')) ? searchParams.get('budget') : DEFAULT_BUDGET;
     const lead = searchParams.get('lead') ? { agentId: searchParams.get('lead'), model: searchParams.get('leadModel') || null } : null;
-    return sendJson(res, 200, { budget, workers: autoTeam(await getAgents({ refresh }), { budget, lead }) });
+    const agents = await getAgents({ refresh });
+    // the starting team, and every model the lead may add to it (catalog.js)
+    return sendJson(res, 200, { budget, workers: autoTeam(agents, { budget, lead }), catalog: await buildCatalog(agents, { budget }) });
   }
   if (pathname === '/api/settings') {
     if (method === 'GET') return sendJson(res, 200, { settings: getSettings(), defaults: DEFAULTS, gate: gateStats() });
