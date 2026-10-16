@@ -11,7 +11,7 @@
 //
 // The API key is the user's own: read from EVREN_API_KEY or data/evren.json ({ "apiKey": "…" },
 // gitignored) and sent only to the gateway. Before the first call the key's owner must accept the
-// gateway's terms (403 terms_not_accepted); detect() reports that and the Ajanlar panel's button
+// gateway's terms (403 terms_not_accepted); detect() reports that and the Ajanlar ve API'ler dialog's button
 // (login()) accepts the current version.
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -27,7 +27,7 @@ const TURN_TIMEOUT_MS = 15 * 60 * 1000;
 const MODELS_TTL_MS = 10 * 60 * 1000;
 
 const NO_KEY = `EVREN API anahtarı yok: EVREN_API_KEY ortam değişkenini ya da data/evren.json dosyasını ({"apiKey": "evren_llm_…"}) ayarlayın.`;
-const TERMS = "EVREN kullanım şartları kabul edilmemiş: Ajanlar panelinde EVREN için 'Şartları kabul et'e basın.";
+const TERMS = "EVREN kullanım şartları kabul edilmemiş: Ajanlar ve API'ler penceresinde EVREN için 'Şartları kabul et'e basın.";
 
 function apiKey() {
   if (process.env.EVREN_API_KEY) return process.env.EVREN_API_KEY.trim();

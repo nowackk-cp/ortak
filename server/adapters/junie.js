@@ -24,7 +24,7 @@ import { AcpClient, INIT_PARAMS } from './acp.js';
 const NAME = 'Junie';
 const SAFE_ARG = /^[A-Za-z0-9._:\/-]+$/;
 const NOT_INSTALLED = 'Junie CLI bulunamadı: https://junie.jetbrains.com/cli adresindeki kurulumla yükleyin (`junie` PATH üzerinde olmalı).';
-const NOT_LOGGED_IN = 'Junie oturumu yok: Ajanlar panelinden "Giriş yap" ile JetBrains hesabınızla oturum açın (auth login).';
+const NOT_LOGGED_IN = 'Junie oturumu yok: Ajanlar ve API’ler penceresinden "Giriş yap" ile JetBrains hesabınızla oturum açın (auth login).';
 const AUTH_TTL_MS = 3 * 60_000;
 const VERSION_TTL_MS = 30 * 60_000;
 
@@ -203,7 +203,7 @@ async function diagnoseFromLog(sinceMs) {
     return 'Junie bu model için JetBrains AI aboneliği istiyor: "Junie Lite (ücretsiz)" modelini seçin ya da account.jetbrains.com üzerinden bir JetBrains AI planı edinin.';
   }
   if (/retry login - no more retries left|Authorization failed, will enforcing relogin/i.test(text)) {
-    return 'Junie oturum yetkisini kaybetti: Ajanlar panelinden "Giriş yap" ile tekrar oturum açın.';
+    return 'Junie oturum yetkisini kaybetti: Ajanlar ve API’ler penceresinden "Giriş yap" ile tekrar oturum açın.';
   }
   if (/\b429\b|rate.?limit|quota exceeded/i.test(text)) return 'Junie kullanım limiti doldu (rate limit).';
   return null;

@@ -177,7 +177,7 @@ async function loginAgent(id) {
   try {
     r = await api(`/api/agents/${enc(id)}/login`, { method: 'POST' });
   } catch { return; /* error toast shown by api() */ }
-  toast(r?.message || `${name}: açılan pencerede oturum açın; bitince Ajanlar panelini yenileyin.`, 'info', 6000);
+  toast(r?.message || `${name}: açılan pencerede oturum açın; bitince Ajanlar ve API’ler penceresini yenileyin.`, 'info', 6000);
   if (!agent?.login?.required) return;
   state.loggingIn.add(id);
   paintAgents();
@@ -223,6 +223,7 @@ async function loadAgents(refresh = false) {
   newrun.refreshAgents();
   state.runView?.refreshLabels();
   paintAgents();
+  updateComposerCtx();
 }
 
 async function loadLimits(refresh = false) {
@@ -237,6 +238,29 @@ async function loadLimits(refresh = false) {
 async function refreshAll() {
   await Promise.all([loadAgents(true), loadLimits(true)]);
   toast('Ajanlar ve limitler yenilendi', 'success', 1800);
+}
+
+// ---- "Ajanlar ve API’ler" dialog -------------------------------------------------------------
+
+let agentsReturn = null;
+
+function openAgents() {
+  const dlg = $('agents-dialog');
+  if (!dlg.hidden) return;
+  agentsReturn = document.activeElement;
+  dlg.hidden = false;
+  if (mqMobile.matches) closeDrawer();
+  dlg.querySelector('.modal')?.focus();
+  // quotas may be stale: refresh in the background when older than a minute
+  if (Date.now() - state.limitsAt > 60_000) loadLimits();
+}
+
+function closeAgents() {
+  const dlg = $('agents-dialog');
+  if (dlg.hidden) return;
+  dlg.hidden = true;
+  agentsReturn?.focus?.();
+  agentsReturn = null;
 }
 
 // ---- run history -----------------------------------------------------------------------------
@@ -274,8 +298,8 @@ function applySurface(sf) {
   document.body.dataset.surface = sf;
   renderSurfaceSwitch();
   newrun.setSurface(sf);
-  $('new-btn').replaceChildren(icon('plus'), h('span', { text: sf === 'chat' ? 'Yeni sohbet' : 'Yeni' }));
-  $('sb-runs-title').textContent = sf === 'chat' ? 'Sohbetler' : 'Geçmiş';
+  $('new-btn').replaceChildren(h('span', { class: 'nb-ico' }, icon('plus')), h('span', { text: sf === 'chat' ? 'Yeni sohbet' : 'Yeni çalışma' }));
+  $('sb-runs-title').textContent = sf === 'chat' ? 'Sohbetler' : 'Çalışmalar';
   if (changed) paintRuns();
 }
 
@@ -324,8 +348,28 @@ function closeRun() {
   state.runView = null;
 }
 
+/** The new-run screen holds the composer in its middle; a run keeps it at the bottom. */
+let composerWrap = null;
+
+function placeComposer(slot) {
+  const wrap = (composerWrap ||= $('composer-wrap'));
+  const target = slot || document.querySelector('.main');
+  if (wrap.parentElement !== target) target.append(wrap);
+  document.body.classList.toggle('view-new', !!slot);
+}
+
+function useSuggestion(text) {
+  const ta = $('prompt');
+  ta.value = text;
+  autosize();
+  saveDraft();
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
 function showNew() {
   closeRun();
+  placeComposer(null); // out of the old screen before it is replaced
   state.view = 'new';
   state.runId = null;
   newrun.mount($('content'), {
@@ -333,7 +377,11 @@ function showNew() {
     cwd: state.cwd,
     cwdInfo: state.cwdChecked === state.cwd ? state.cwdInfo : null,
     onModeChange: () => updateComposer(),
+    onSuggest: useSuggestion,
+    onPickFolder: () => openFolderPicker(state.cwd, (p) => { setCwd(p, { check: false }); checkCwd(); }),
+    onAgents: openAgents,
   });
+  placeComposer(newrun.composerSlot());
   $('content').scrollTop = 0;
   renderTopbar();
   updateComposer();
@@ -349,6 +397,7 @@ async function openRun(id) {
   const token = ++openToken;
   state.view = 'run';
   state.runId = id;
+  placeComposer(null);
   paintRuns();
   renderTopbar();
   updateComposer();
@@ -410,7 +459,7 @@ function onRunStatus(view) {
       if (was === 'running' && view.status !== 'running') {
         loadLimits();
         setTimeout(loadRuns, 600);
-        // Web-driven agents report page health (warnings in the Ajanlar panel) after each turn.
+        // Web-driven agents report page health (warnings in the Ajanlar ve API’ler dialog) after each turn.
         if (view.meta?.lanes?.some((l) => l.agentId === 'gemini')) loadAgents(true);
       }
     }
@@ -453,7 +502,7 @@ function renderTopbar() {
       ? [h('button', { type: 'button', class: 'btn btn-danger btn-sm', title: 'Durdur (Esc)', onclick: cancelRun }, icon('stop'), h('span', { class: 'hide-xs', text: 'Durdur' }))]
       : []));
   } else {
-    title.replaceChildren(h('span', { class: 'tb-text', text: state.surface === 'chat' ? 'Yeni sohbet' : 'Yeni çalışma' }));
+    title.replaceChildren();
     actions.replaceChildren();
   }
 }
@@ -521,10 +570,11 @@ function updateComposerCtx() {
   const chips = [];
   if (state.view === 'new') {
     const m = modeInfo(newrun.currentMode(), state.surface);
-    chips.push(h('span', { class: 'ctx-chip' }, icon(m.icon), m.label));
     if (state.surface !== 'chat') chips.push(state.cwd
       ? h('button', { type: 'button', class: 'ctx-chip', title: state.cwd, onclick: focusCwd }, icon('folder'), basename(state.cwd))
       : h('button', { type: 'button', class: 'ctx-chip warn', onclick: focusCwd }, icon('folder'), 'Klasör seçin'));
+    const sum = newrun.summary();
+    chips.push(h('span', { class: 'ctx-chip ctx-sum', title: sum ? `${m.label} · ${sum}` : m.label }, icon(m.icon), sum || m.label));
   } else if (state.view === 'run' && state.runView) {
     const v = state.runView;
     const m = modeInfo(v.mode, runSurface(v.meta));
@@ -672,17 +722,9 @@ function bind() {
     setTimeout(focusComposer, 30);
   });
 
-  const panel = $('agents-panel');
-  const setCollapsed = (c) => {
-    panel.classList.toggle('collapsed', c);
-    $('ap-toggle').setAttribute('aria-expanded', c ? 'false' : 'true');
-  };
-  setCollapsed(!!store.get('agentsCollapsed', false));
-  $('ap-toggle').addEventListener('click', () => {
-    const c = !panel.classList.contains('collapsed');
-    setCollapsed(c);
-    store.set('agentsCollapsed', c);
-  });
+  $('agents-btn').addEventListener('click', openAgents);
+  $('agents-close').addEventListener('click', closeAgents);
+  $('agents-dialog').addEventListener('click', (e) => { if (e.target === $('agents-dialog')) closeAgents(); });
   $('ap-refresh').addEventListener('click', refreshAll);
 
   const ta = $('prompt');
@@ -707,6 +749,7 @@ function bind() {
       return;
     }
     if (e.key === 'Escape' && !e.defaultPrevented) {
+      if (!$('agents-dialog').hidden) { closeAgents(); return; }
       if (document.body.classList.contains('drawer-open')) { closeDrawer(); return; }
       if (state.view === 'run' && state.runView?.status === 'running') {
         e.preventDefault();
@@ -734,8 +777,12 @@ function init() {
   $('sb-close').append(icon('x'));
   $('menu-btn').append(icon('menu'));
   $('ap-refresh').append(icon('refresh'));
+  $('agents-close').append(icon('x'));
   $('cwd-browse').append(icon('folder'));
-  $('ap-chev').append(icon('down'));
+  $('agents-legend').replaceChildren(
+    h('span', {}, h('span', { class: 'tier tier-free', text: 'Ücretsiz' }), 'para ya da abonelik limiti harcamaz'),
+    h('span', {}, h('span', { class: 'tier tier-subscription', text: 'Abonelik' }), 'Claude / ChatGPT / Copilot limitinden harcar'),
+    h('span', {}, h('span', { class: 'tier tier-paid', text: 'Ücretli' }), 'token başına ücret'));
   renderThemeBtn();
   applySurface(state.surface);
 

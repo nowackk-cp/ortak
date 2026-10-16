@@ -1,7 +1,9 @@
-// Sidebar: project folder, run history, agents + limits panel.
+// Sidebar: project folder, run history (grouped by day), the "Ajanlar ve API'ler" summary and
+// its dialog (agents, cost tiers, limits).
 import { h, icon, spinner } from './dom.js';
-import { relTime, resetText, fmtDate, basename, enc } from './util.js';
+import { relTime, resetText, fmtDate, basename, enc, toMs } from './util.js';
 import { RUN_STATUS, modeInfo, runSurface } from './modes.js';
+import { agentTiers, tierBadge } from './agents.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -55,7 +57,29 @@ export function renderRuns(runs, activeId, { onDelete, loaded, emptyText }) {
     el.replaceChildren(h('div', { class: 'sb-empty', text: emptyText || 'Henüz çalışma yok. Bir mod seçip görevinizi yazarak başlayın.' }));
     return;
   }
-  el.replaceChildren(...runs.map((r) => {
+  // Bugün / Dün / Son 7 gün / Bu ay / Daha eski, like the chat apps.
+  const day = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const today = day(Date.now());
+  const groupOf = (r) => {
+    const t = toMs(r.updatedAt || r.createdAt) || Date.now();
+    const diff = Math.round((today - day(t)) / 86400000);
+    if (diff <= 0) return 'Bugün';
+    if (diff === 1) return 'Dün';
+    if (diff < 7) return 'Son 7 gün';
+    if (diff < 30) return 'Son 30 gün';
+    return 'Daha eski';
+  };
+  const sorted = [...runs].sort((a, b) => (toMs(b.updatedAt || b.createdAt) || 0) - (toMs(a.updatedAt || a.createdAt) || 0));
+  const out = [];
+  let last = null;
+  for (const r of sorted) {
+    const g = groupOf(r);
+    if (g !== last) { out.push(h('div', { class: 'runs-group', text: g })); last = g; }
+    out.push(runItem(r));
+  }
+  el.replaceChildren(...out);
+
+  function runItem(r) {
     const mode = modeInfo(r.mode, runSurface(r));
     const status = r.status || 'done';
     const title = r.title || r.config?.prompt || 'Adsız çalışma';
@@ -78,15 +102,15 @@ export function renderRuns(runs, activeId, { onDelete, loaded, emptyText }) {
       href: `#/run/${enc(r.id)}`,
       title: `${title}\n${mode.label} · ${RUN_STATUS[status] || status} · ${fmtDate(r.createdAt)}${r.cwd ? '\n' + r.cwd : ''}`,
     },
-    h('span', { class: 'run-ico' }, icon(mode.icon)),
+    h('span', { class: 'run-ico', title: mode.label }, icon(mode.icon)),
     h('span', { class: 'run-main' },
       h('span', { class: 'run-title', text: title }),
       h('span', { class: 'run-meta' },
         h('span', { class: `sdot s-${status}`, title: RUN_STATUS[status] || status }),
-        h('span', { text: relTime(r.updatedAt || r.createdAt) }),
+        h('span', { text: status === 'running' ? 'çalışıyor' : relTime(r.updatedAt || r.createdAt) }),
         r.cwd && runSurface(r) !== 'chat' && h('span', { class: 'run-cwd', text: basename(r.cwd) }))),
     del);
-  }));
+  }
 }
 
 // ---- agents + limits -------------------------------------------------------------------------
@@ -111,25 +135,49 @@ function limitsEl(lim) {
   return h('div', { class: 'limits' }, items, lim.note && h('div', { class: 'limit-note', text: lim.note }));
 }
 
+/** Sidebar button: "5 aktif · 3 ücretsiz" + one dot per usable agent. */
+function renderSummary(agents, loaded) {
+  const sub = $('ap-count');
+  const dots = $('agents-dots');
+  if (!sub) return;
+  if (!loaded) { sub.textContent = 'Yükleniyor…'; dots?.replaceChildren(); return; }
+  const on = agents.filter((a) => a.available);
+  const free = on.filter((a) => agentTiers(a).has('free')).length;
+  sub.textContent = on.length ? `${on.length} aktif · ${free} ücretsiz` : 'Hiçbiri aktif değil';
+  dots?.replaceChildren(...on.slice(0, 5).map((a) => h('i', { class: `spk-${a.id}`, title: a.name })));
+  const s2 = $('agents-sub');
+  if (s2) s2.textContent = `${on.length} / ${agents.length} kullanılabilir · ${free} ücretsiz`;
+}
+
 export function renderAgents(agents, limits, { loaded, loading, starting, onStart, loggingIn, onLogin }) {
   const body = $('ap-body');
   const btn = $('ap-refresh');
   if (btn) btn.classList.toggle('spinning', !!loading);
+  renderSummary(agents, loaded);
   if (!body) return;
   if (!loaded) { body.replaceChildren(h('div', { class: 'sb-empty' }, spinner('sm'), 'Ajanlar yükleniyor…')); return; }
   if (!agents.length) {
     body.replaceChildren(h('div', { class: 'sb-empty', text: 'Hiç ajan bulunamadı. Claude Code, Codex, OpenCode, Kilo Code, Copilot, Junie veya Antigravity kurulu olmalı.' }));
     return;
   }
-  const summary = $('ap-count');
-  if (summary) summary.textContent = `${agents.filter((a) => a.available).length}/${agents.length}`;
-  body.replaceChildren(...agents.map((a) => {
+  const order = [...agents].sort((a, b) => Number(b.available) - Number(a.available));
+  let shownOff = false;
+  body.replaceChildren(...order.flatMap((a) => {
+    const head = !a.available && !shownOff ? (shownOff = true, [h('div', { class: 'am-group', text: 'Kullanılamıyor' })]) : [];
+    return [...head, agentCard(a)];
+  }));
+
+  function agentCard(a) {
     const tip = a.available ? `${a.name}${a.version ? ' · ' + a.version : ''} — kullanılabilir` : a.reason || 'Kullanılamıyor';
+    const freeModels = (a.models || []).filter((m) => !m.disabled && m.tier === 'free').length;
     return h('div', { class: `agent${a.available ? ' on' : ' off'}`, title: tip },
       h('div', { class: 'agent-line' },
-        h('span', { class: 'dot', 'aria-label': a.available ? 'kullanılabilir' : 'kullanılamıyor' }),
+        h('span', { class: `agent-av spk-${a.id}`, 'aria-hidden': 'true', text: (a.name || a.id).charAt(0).toLocaleUpperCase('tr') }),
         h('span', { class: 'agent-name', text: a.name || a.id }),
-        a.version && h('span', { class: 'agent-ver', text: a.version }),
+        a.available && tierBadge(agentTiers(a)),
+        a.version && h('span', { class: 'agent-ver', text: a.version })),
+      a.available && freeModels > 1 && h('div', { class: 'agent-reason', text: `${freeModels} ücretsiz model` }),
+      h('div', { class: 'agent-tags' },
         a.available && a.capabilities && a.capabilities.edit === false && h('span', { class: 'agent-tag', title: 'Kendi dosya araçları yok: Ortak onun yerine klasörlerde gezer, dosya okur, değişiklikleri uygular ve terminal komutlarını çalıştırır.', text: 'Ortak eli' }),
         a.sleeping && h('span', { class: 'agent-tag agent-sleep', title: 'Kaynak harcamamak için kapalı. İlk turda Ortak kendisi açar (Performans ayarları).' }, icon('moonzz'), 'uykuda')),
       !a.available && a.reason && h('div', { class: 'agent-reason', text: a.reason }),
@@ -151,5 +199,5 @@ export function renderAgents(agents, limits, { loaded, loading, starting, onStar
       }, ...(loggingIn?.has(a.id) ? [spinner('sm'), 'Giriş bekleniyor…'] : [icon('key'), a.login.label || 'Giriş yap'])),
       a.available && a.capabilities?.sandbox === false && h('div', { class: 'agent-reason warn-text', text: 'İzinler zorunlu değil; komutlar sandbox’lı değil.' }),
       a.available && limitsEl(limits?.[a.id]));
-  }));
+  }
 }

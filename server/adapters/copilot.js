@@ -25,7 +25,7 @@ const NAME = 'GitHub Copilot';
 const SAFE_ARG = /^[A-Za-z0-9._:\/-]+$/;
 const PROBE_TTL_MS = 60_000;
 const NOT_INSTALLED = 'GitHub Copilot CLI bulunamadı: `npm i -g @github/copilot` ile kurun (`copilot` PATH üzerinde olmalı).';
-const NOT_LOGGED_IN = 'GitHub Copilot oturumu yok: Ajanlar panelinden "Giriş yap" (terminalde `copilot login`).';
+const NOT_LOGGED_IN = 'GitHub Copilot oturumu yok: Ajanlar ve API’ler penceresinden "Giriş yap" (terminalde `copilot login`).';
 
 const bin = () => resolveBin('copilot', path.join('node_modules', '@github', 'copilot', 'node_modules', '@github',
   `copilot-${process.platform}-${process.arch}`, process.platform === 'win32' ? 'copilot.exe' : 'copilot'));

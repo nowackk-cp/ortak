@@ -80,6 +80,10 @@ const ICONS = {
   gauge: '<path d="M4.5 17.5a8.5 8.5 0 1 1 15 0"/><path d="M12 13.5l4-4.5"/><circle cx="12" cy="14" r="1.3" fill="currentColor" stroke="none"/>',
   code: '<path d="M8.5 7 3.5 12l5 5M15.5 7l5 5-5 5"/>',
   key: '<circle cx="8" cy="15.5" r="3.8"/><path d="M10.8 12.8 19.5 4M16 7.5l2.5 2.5M13.8 9.8l2 2"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+  more: '<circle cx="5.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.3" fill="currentColor" stroke="none"/>',
+  sidebar: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/>',
+  zap: '<path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/>',
   moonzz: '<path d="M18.5 14.5A7 7 0 0 1 9.5 5.5a7 7 0 1 0 9 9z"/><path d="M15 4h4l-4 4h4"/>',
 };
 

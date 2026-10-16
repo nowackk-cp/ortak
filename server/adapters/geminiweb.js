@@ -21,7 +21,7 @@ import { AbortError, truncate } from './base.js';
 import { activePort, launchBrowser, closeBrowser, openSignInWindow, listPages, Page, PROFILE, START_URL, sleep } from './cdp.js';
 import { getSettings, onSettingsChange } from '../settings.js';
 
-const NOT_RUNNING = "Gemini penceresi kapalı: Ajanlar panelinde Gemini için Başlat'a basın (ilk seferde Google ile giriş yapmanız gerekir).";
+const NOT_RUNNING = "Gemini penceresi kapalı: Ajanlar ve API'ler penceresinde Gemini için Başlat'a basın (ilk seferde Google ile giriş yapmanız gerekir).";
 const SIGNED_OUT = "Gemini'de oturum açık değil: açılan pencerede Google hesabınızla giriş yapın, pencereyi kapatın ve Başlat'a tekrar basın.";
 const TURN_TIMEOUT_MS = 15 * 60 * 1000;
 const POLL_MS = 600;
@@ -95,7 +95,7 @@ scheduleIdleClose(); // also covers a window left open from before a server rest
 
 // ---- page health -----------------------------------------------------------------------------
 // Ortak drives a web page, so Google changing it (or Gemini failing repeatedly) shows up here first.
-// detect() turns this into a warning under Gemini in the Ajanlar panel; a good turn clears it.
+// detect() turns this into a warning under Gemini in the Ajanlar ve API'ler dialog; a good turn clears it.
 const health = { fails: 0, last: '', pageChanged: false, pageError: false };
 const PAGE_CHANGED = /bulunamadı|yüklenemedi|kabul etmedi/i;
 
@@ -110,7 +110,7 @@ function noteFailure(message) {
   health.pageError = /^Gemini: /.test(health.last);
 }
 
-/** Turkish warning for the Ajanlar panel, or null while things work. */
+/** Turkish warning for the Ajanlar ve API'ler dialog, or null while things work. */
 export function healthWarning() {
   if (!health.last) return null;
   if (health.pageChanged) return `Gemini sayfası değişmiş olabilir (${health.last}). Sorun sürerse Ortak'ın Gemini köprüsünün güncellenmesi gerekir.`;

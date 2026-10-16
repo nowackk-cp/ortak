@@ -12,6 +12,26 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
 
 let counter = 0;
 
+// Plays the orchestrator roles well enough for UI work: a lead hands out tasks to the @handles it
+// was given and finishes on its first review; a planner plans two steps; a reviewer approves.
+function roleReply(prompt, system) {
+  if (/yöneticisisin/.test(system)) {
+    if (/^Denetim \d+\/\d+|\nDenetim \d+\/\d+/.test(prompt)) {
+      return 'Raporları ve değişiklikleri inceledim; iş tamam.\n\n```json\n{"tasks":[],"done":true,"summary":"Görev ekip tarafından tamamlandı (sahte ajan)."}\n```';
+    }
+    const handles = [...new Set([...prompt.matchAll(/^- @([\w.-]+) —/gm)].map((m) => m[1]))].slice(0, 3);
+    if (!handles.length) return null;
+    const tasks = handles.map((hd, i) => ({ id: `t${i + 1}`, agent: hd, task: `Parça ${i + 1}: ilgili dosyaları incele ve gerekeni yap.` }));
+    if (handles.length > 1) tasks.push({ id: `t${handles.length + 1}`, agent: handles[0], task: 'Diğer parçaları birleştir ve test et.', after: tasks.map((t) => t.id) });
+    return `İşi ${tasks.length} göreve böldüm.\n\n\`\`\`json\n${JSON.stringify({ tasks, done: false })}\n\`\`\``;
+  }
+  if (/planlayıcısısın/.test(system)) {
+    return 'Plan hazır.\n\n```json\n{"steps":[{"title":"Hazırlık","details":"Gerekli dosyaları oluştur"},{"title":"Uygulama","details":"İşi tamamla ve test et"}]}\n```';
+  }
+  if (/denetçisisin/.test(system)) return 'Değişiklikleri inceledim; hedefe uygun.\n\nKARAR: ONAY';
+  return null;
+}
+
 export default {
   id: 'mock',
   name: 'Test Ajanı',
@@ -32,17 +52,17 @@ export default {
     return { items: [{ label: 'Sahte kota', usedPercent: 42, resetsAt: new Date(Date.now() + 3600e3).toISOString() }] };
   },
 
-  async run({ prompt, cwd, model, sessionId, permission = 'read-only', signal, onEvent = () => {} }) {
+  async run({ prompt, cwd, model, sessionId, permission = 'read-only', system, signal, onEvent = () => {} }) {
     const sid = sessionId || `mock-${++counter}`;
     const delay = model === 'yavas' ? 120 : 25;
     onEvent({ type: 'status', text: 'Düşünüyor…' });
     await sleep(delay * 4, signal);
 
     const firstLine = String(prompt).split('\n').find((l) => l.trim()) || '';
-    const reply =
+    const reply = roleReply(String(prompt), String(system || '')) ||
       `(${model || 'hizli'}) Mesajını aldım: "${firstLine.slice(0, 120)}". ` +
       `Bu sahte bir cevaptır; gerçek ajanlar yerine arayüzü ve orkestrasyonu test etmek için kullanılır.\n\n` +
-      `- Madde bir\n- Madde iki\n\n\`\`\`js\nconsole.log('merhaba');\n\`\`\``;
+      `- Madde bir\n- Madde iki\n\n\`\`\`js\nconsole.log('merhaba');\n\`\`\`\n\nÖZET: sahte iş yapıldı`;
 
     const toolId = `t${counter}`;
     onEvent({ type: 'tool-start', id: toolId, name: 'Read', input: { file_path: 'README.md' } });

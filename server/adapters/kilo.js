@@ -76,7 +76,7 @@ async function loadModels(file) {
     const m = { id: full, label: free ? `${nice.replace(/\s*free$/i, '')} (ücretsiz)` : nice, group, free };
     if (!free && !accounts) {
       m.disabled = true;
-      m.note = 'Ücretli: Kilo hesabı ve kredi gerekir (Ajanlar panelinde "Hesap bağla").';
+      m.note = 'Ücretli: Kilo hesabı ve kredi gerekir (Ajanlar ve API’ler penceresinde "Hesap bağla").';
     }
     return m;
   });

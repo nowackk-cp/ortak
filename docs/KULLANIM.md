@@ -58,7 +58,7 @@ Bu modellerin diğer araçları:
 - Groq'un ücretsiz planı dakikada 8.000 token ile sınırlı ve araç döngüsü her adımda sohbeti yeniden gönderir. Sağlayıcı "N sn sonra tekrar dene" derse (en fazla 45 sn) Ortak bekleyip kaldığı yerden devam eder.
 - Gemini web'in araç çağırma arayüzü yoktur; o her zaman metin yöntemini kullanır.
 
-Gemini web bir sayfa üzerinden sürüldüğü için Ortak sayfanın sağlığını izler: sayfa değişmiş görünürse (düğme, kutu ya da menü bulunamazsa), Gemini sayfada hata gösterirse ya da üst üste iki tur başarısız olursa Ajanlar panelinde Gemini'nin altında sarı bir uyarı çıkar. İlk başarılı turda uyarı kalkar. Gemini bir mesajı alıp cevaba hiç başlamazsa Ortak bunu fark eder ve mesajı bir kez yeniden gönderir.
+Gemini web bir sayfa üzerinden sürüldüğü için Ortak sayfanın sağlığını izler: sayfa değişmiş görünürse (düğme, kutu ya da menü bulunamazsa), Gemini sayfada hata gösterirse ya da üst üste iki tur başarısız olursa Ajanlar ve API'ler penceresinde Gemini'nin altında sarı bir uyarı çıkar. İlk başarılı turda uyarı kalkar. Gemini bir mesajı alıp cevaba hiç başlamazsa Ortak bunu fark eder ve mesajı bir kez yeniden gönderir.
 
 ## Ajanlar ve modelleri
 
@@ -71,12 +71,12 @@ Gemini web bir sayfa üzerinden sürüldüğü için Ortak sayfanın sağlığı
 | **OpenCode** | `opencode run` | Hesapsız **ücretsiz** OpenCode Zen modelleri: DeepSeek V4.1 Flash, Big Pickle, Nemotron 3 Ultra / 3.5 Lightning / 3.5 Super VL, MiMo V2.6 Flash, Muse Spark 1.3, LongCat 2.5, Cat Jam, Space Bunny. Hesap bağlarsan (`opencode auth login`) o sağlayıcının modelleri de listeye gelir. |
 | **Kilo Code** | `kilo run` | Kilo Gateway'in 300+ modeli. Hesapsız **ücretsiz** olanlar: Otomatik (ücretsiz), Nemotron 3 Ultra/Super/Nano/3.5, Laguna S/XS 2.1, Inkling Small, North Mini Code, Glyph Cluster, Dots3-Note, LFM2.5, OpenRouter Free. Diğerleri (Claude, GPT, Gemini, Grok, Qwen, GLM, Kimi…) Kilo hesabı + kredi ister; o zamana kadar listede kilitli görünür. |
 | **GitHub Copilot** | `copilot` CLI (GitHub hesabın; `gh` girişi de yeter) | Copilot Free'de yalnızca **Otomatik** (Copilot modeli kendisi seçer, ör. GPT-6 Luna); ücretli planda hesabındaki tüm modeller. Kota: ayda 200 sohbet/ajan isteği (Free). |
-| **Junie** | `junie` (JSON akışı) | **Junie Lite** (ücretsiz, varsayılan) ve JetBrains AI planı gerektiren modeller: Claude Fable 5.1 / Opus 5.5 / Opus 5 / Sonnet 5.5 / Sonnet 5 / Haiku 5.5, GPT-6-Astra / 6.1-Sol / 6-Sol / 6-Luna / 5.6-Sol / 5.6-Terra / 5.6-Luna, Gemini 3.8 / 3.7 / 3.6 Flash, Grok 4.7 / 4.6. Önce JetBrains hesabıyla giriş gerekir: Ajanlar panelinde **Giriş yap** tarayıcıyı açar. Abonelik yoksa yalnızca Junie Lite çalışır. |
+| **Junie** | `junie` (JSON akışı) | **Junie Lite** (ücretsiz, varsayılan) ve JetBrains AI planı gerektiren modeller: Claude Fable 5.1 / Opus 5.5 / Opus 5 / Sonnet 5.5 / Sonnet 5 / Haiku 5.5, GPT-6-Astra / 6.1-Sol / 6-Sol / 6-Luna / 5.6-Sol / 5.6-Terra / 5.6-Luna, Gemini 3.8 / 3.7 / 3.6 Flash, Grok 4.7 / 4.6. Önce JetBrains hesabıyla giriş gerekir: Ajanlar ve API'ler penceresinde **Giriş yap** tarayıcıyı açar. Abonelik yoksa yalnızca Junie Lite çalışır. |
 | **Groq** | Groq'un OpenAI-uyumlu API'si (LPU), kendi API anahtarınla (`data/groq.json` ya da `GROQ_API_KEY`) | Ücretsiz planın sohbet modelleri: Qwen 3.8 27B, GPT-OSS 120B / 20B… Çok hızlı. Ücretsiz plan: günde 1.000 istek, dakikada 8.000 token. Gerçek araç çağırır; dosyalara Ortak'ın "elleri" ile dokunur. |
 | **OpenRouter** | OpenRouter'ın OpenAI-uyumlu API'si, kendi API anahtarınla (`data/openrouter.json` ya da `OPENROUTER_API_KEY`) | Yalnızca **ücretsiz** modeller (`:free`, `openrouter/free`); ücretli modeller listelenmez ve reddedilir. Araç destekleyen modeller gerçek araç çağırır; dosyalara Ortak'ın "elleri" ile dokunur. |
-| **EVREN** | EVREN LLM Gateway'in OpenAI-uyumlu API'si (evren.ssyz.org.tr), kendi API anahtarınla | Anahtarının erişebildiği tüm sohbet modelleri (`/v1/models`'tan canlı okunur, sağlayıcıya göre gruplanır; düşünme düzeyi destekleyenler düzeyleriyle). Sadece metinle konuşur (Gemini web gibi): dosyalara Ortak'ın "elleri" ile dokunur. Kota ve kredi Ajanlar panelinde görünür. |
+| **EVREN** | EVREN LLM Gateway'in OpenAI-uyumlu API'si (evren.ssyz.org.tr), kendi API anahtarınla | Anahtarının erişebildiği tüm sohbet modelleri (`/v1/models`'tan canlı okunur, sağlayıcıya göre gruplanır; düşünme düzeyi destekleyenler düzeyleriyle). Sadece metinle konuşur (Gemini web gibi): dosyalara Ortak'ın "elleri" ile dokunur. Kota ve kredi Ajanlar ve API'ler penceresinde görünür. |
 
-Uzun model listeleri seçicide gruplanır (Ücretsiz, Anthropic, OpenAI…). Ajanlar panelindeki **Giriş yap** /
+Uzun model listeleri seçicide gruplanır (Ücretsiz, Anthropic, OpenAI…). Ajanlar ve API'ler penceresindeki **Giriş yap** /
 **Hesap bağla** düğmeleri ajanın kendi giriş akışını (terminal penceresi ya da tarayıcı) açar; Ortak şifreni görmez.
 Yeni bir ajan kullanılabilir olunca, daha önce kaydettiğin beyin fırtınası ve yönetici ayarlarına bir kez kendiliğinden eklenir.
 
@@ -111,7 +111,7 @@ bilgisayardan erişilebilir. Gerçek ajanları harcamadan arayüzü denemek içi
 | Limitleri otomatik yenile | 5 dk | Pencere arka plandayken hiç yenilenmez. |
 
 **Hafif mod** düğmesi yoğun bir bilgisayar için hepsini birden kısar (tek ajan, kısa uyku süreleri).
-Kapalı olup gerektiğinde açılacak ajanlar Ajanlar panelinde **uykuda** etiketiyle görünür. Arayüz,
+Kapalı olup gerektiğinde açılacak ajanlar Ajanlar ve API'ler penceresinde **uykuda** etiketiyle görünür. Arayüz,
 akan metni saniyede en fazla ~20 kez çizer; pencere arka plandayken neredeyse hiç çizmez.
 
 ## Gereksinimler
@@ -119,8 +119,8 @@ akan metni saniyede en fazla ~20 kez çizer; pencere arka plandayken neredeyse h
 - Node.js 22+ (npm paketi gerekmez)
 - **Claude Code**: `claude` komutu kurulu ve giriş yapılmış
 - **Codex**: `codex` komutu kurulu ve `codex login` yapılmış
-- **Antigravity**: uygulama kurulu ve **açık** olmalı. Kapalıysa Ajanlar panelindeki **Başlat** butonu açar.
-- **Gemini (web)**: Chrome veya Edge. Ajanlar panelinde Gemini → **Başlat**, Ortak'a ait ayrı bir Gemini penceresi
+- **Antigravity**: uygulama kurulu ve **açık** olmalı. Kapalıysa Ajanlar ve API'ler penceresindeki **Başlat** butonu açar.
+- **Gemini (web)**: Chrome veya Edge. Ajanlar ve API'ler penceresinde Gemini → **Başlat**, Ortak'a ait ayrı bir Gemini penceresi
   açar. İlk seferde o pencere normal modda açılır: Google hesabınla giriş yap, pencereyi kapat, tekrar **Başlat**
   (Google, kontrol edilen bir tarayıcıda girişe izin vermiyor; oturum profilde kalıyor). Gemini uygulamandaki
   modeller (4 Argon ve düşünme düzeyi, 3.1 Pro, Flash) bu yolla kullanılır. Kendi dosya araçları yok, ama Ortak onun
@@ -128,8 +128,8 @@ akan metni saniyede en fazla ~20 kez çizer; pencere arka plandayken neredeyse h
   (terminal komutlarını da Ortak çalıştırır). Sohbetler Gemini geçmişinde görünür.
 - **OpenCode** (`npm i -g @opencode/cli`) ve **Kilo Code** (`npm i -g @kilocode/cli`): kurulu olmaları yeter, ücretsiz modeller hesapsız çalışır.
 - **GitHub Copilot** (`npm i -g @github/copilot`): `copilot login` ya da `gh auth login` ile giriş yapılmış olmalı.
-- **Junie**: junie.jetbrains.com/cli kurulumu; ilk seferde Ajanlar panelinden **Giriş yap** (JetBrains hesabı).
-- **EVREN**: API anahtarı `data/evren.json` dosyasında (`{"apiKey": "evren_llm_…"}`, git'e girmez) ya da `EVREN_API_KEY` ortam değişkeninde. İlk kullanımdan önce Ajanlar panelinde **Şartları kabul et** (EVREN kullanım şartları, metni: `/v1/terms/text`).
+- **Junie**: junie.jetbrains.com/cli kurulumu; ilk seferde Ajanlar ve API'ler penceresinden **Giriş yap** (JetBrains hesabı).
+- **EVREN**: API anahtarı `data/evren.json` dosyasında (`{"apiKey": "evren_llm_…"}`, git'e girmez) ya da `EVREN_API_KEY` ortam değişkeninde. İlk kullanımdan önce Ajanlar ve API'ler penceresinde **Şartları kabul et** (EVREN kullanım şartları, metni: `/v1/terms/text`).
 - Codex bu bilgisayarda yoksa `npm run araclar` onu Ortak klasörüne (`tools/`) kurar.
 - Paralel mod için proje klasörü en az bir commit'i olan bir git deposu olmalı.
 

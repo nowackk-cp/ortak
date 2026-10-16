@@ -1,8 +1,9 @@
 // "Yeni çalışma" screen: mode tabs + per-mode setup. Remembers the last config per mode.
-import { h, icon, fill } from './dom.js';
-import { store, basename } from './util.js';
-import { PERMISSIONS, SURFACE_MODE_IDS, modeInfo } from './modes.js';
-import { catalog, agentPicker, sanitizeSel, usableAgents, defaultModel, getAgent, unusable } from './agents.js';
+import { h, icon, fill, spinner } from './dom.js';
+import { store, basename, enc } from './util.js';
+import { PERMISSIONS, SURFACE_MODE_IDS, PRIMARY_MODES, BUDGETS, modeInfo } from './modes.js';
+import { catalog, agentPicker, sanitizeSel, usableAgents, defaultModel, getAgent, unusable, tierBadge, modelLabel, agentName } from './agents.js';
+import { api } from './api.js';
 
 const MAX_PARTICIPANTS = 8;
 
@@ -18,6 +19,9 @@ const modes = { code: storedMode('code'), chat: storedMode('chat') };
 let mode = modes[surface];
 const configs = {}; // `${surface}:${mode}` → config
 let root = null;
+let heroEl = null;
+let slotEl = null;
+let restEl = null;
 let ctx = { cwd: '', cwdInfo: null, onModeChange: null };
 
 export const currentMode = () => mode;
@@ -71,9 +75,10 @@ function defaults(m, sf = surface) {
       return { participants: parts.length ? parts : [sel(true, 'claude')], permission: 'edit' };
     }
     case 'team':
-      return { planner: sel(false, 'claude'), workers: [sel(true, 'claude')], reviewer: sel(false, 'codex'), permission: 'edit' };
+      return { planner: sel(false, 'claude'), workers: [sel(true, 'claude')], reviewer: sel(false, 'codex'), fixRounds: 3, permission: 'edit' };
     case 'lead':
-      return { lead: pick('claude', 'opus') || sel(false, 'claude'), workers: leadWorkers(), steps: 8, permission: 'edit' };
+      // auto: the server picks the team from every usable agent the budget allows (tiers.js)
+      return { lead: pick('claude', 'opus') || sel(false, 'claude'), teamMode: 'auto', budget: 'free-first', workers: leadWorkers(), steps: 8, permission: 'edit' };
     default:
       return {};
   }
@@ -108,17 +113,22 @@ function sanitize(m, c, sf = surface) {
     }
     case 'parallel':
       return { participants: list(c.participants, false, d.participants), permission: perm(c.permission, ['edit', 'full'], d.permission) };
-    case 'team':
+    case 'team': {
+      const f = Number(c.fixRounds);
       return {
         planner: sanitizeSel(c.planner, false, 'claude'),
         workers: list(c.workers, false, d.workers),
         reviewer: sanitizeSel(c.reviewer, false, 'codex'),
+        fixRounds: f >= 1 && f <= 5 ? Math.round(f) : d.fixRounds,
         permission: perm(c.permission, ['edit', 'full'], d.permission),
       };
+    }
     case 'lead': {
       const n = Number(c.steps);
       return {
         lead: sanitizeSel(c.lead, false, 'claude'),
+        teamMode: c.teamMode === 'manual' ? 'manual' : 'auto',
+        budget: BUDGETS.some((b) => b.id === c.budget) ? c.budget : d.budget,
         workers: list(c.workers, false, d.workers),
         steps: n >= 1 && n <= 12 ? Math.round(n) : d.steps,
         permission: perm(c.permission, ['read-only', 'edit', 'full'], d.permission),
@@ -183,14 +193,39 @@ export function setContext(next) {
   else renderHero();
 }
 
+/**
+ * Draws the new-run screen into `container`. The page keeps one composer: app.js moves it into
+ * composerSlot() (between the greeting and the mode bar, like the chat apps). Re-renders never
+ * detach the slot, so typing is never interrupted.
+ */
 export function mount(container, context) {
   const { surface: sf, ...rest } = context || {};
   ctx = { ...ctx, ...rest };
   if (sf) { surface = sf === 'chat' ? 'chat' : 'code'; mode = modes[surface]; }
-  root = h('div', { class: 'newrun' });
+  heroEl = h('div', { class: 'hero' });
+  slotEl = h('div', { class: 'composer-slot' });
+  restEl = h('div', { class: 'newrun-rest' });
+  root = h('div', { class: 'newrun' }, heroEl, slotEl, restEl);
   container.replaceChildren(root);
   render();
 }
+
+export const composerSlot = () => slotEl;
+
+/** One line for the composer: what will run ("Opus 5.5 yönetir · ekip otomatik"). */
+export function summary() {
+  if (!catalog.loaded) return '';
+  const c = cfg();
+  const who = (x) => (x?.agentId ? `${agentName(x.agentId)} · ${shortModel(x.agentId, x.model)}` : '');
+  switch (mode) {
+    case 'chat': return who(c.agent);
+    case 'lead': return `${shortModel(c.lead.agentId, c.lead.model)} yönetir · ${c.teamMode === 'auto' ? 'otomatik ekip' : `${c.workers.length} alt ajan`}`;
+    case 'team': return `${c.workers.length} çalışan · en fazla ${c.fixRounds} düzeltme`;
+    default: return c.participants ? `${c.participants.length} katılımcı` : '';
+  }
+}
+
+const shortModel = (agentId, modelId) => modelLabel(agentId, modelId).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+—.*$/, '').trim();
 
 /** RunConfig (without cwd/prompt) for the selected mode. */
 export function runConfig() {
@@ -209,8 +244,10 @@ export function runConfig() {
     case 'group': return { mode, participants: c.participants.map(s), rounds: c.rounds };
     case 'brainstorm': return { mode, participants: c.participants.map(s), rounds: c.rounds, moderator: s(c.moderator) };
     case 'parallel': return { mode, participants: c.participants.map(s), permission: c.permission };
-    case 'team': return { mode, planner: s(c.planner), workers: c.workers.map(s), reviewer: s(c.reviewer), permission: c.permission };
-    case 'lead': return { mode, lead: s(c.lead), workers: c.workers.map(s), steps: c.steps, permission: c.permission };
+    case 'team': return { mode, planner: s(c.planner), workers: c.workers.map(s), reviewer: s(c.reviewer), fixRounds: c.fixRounds, permission: c.permission };
+    case 'lead': return {
+      mode, lead: s(c.lead), workers: c.teamMode === 'auto' ? 'auto' : c.workers.map(s), budget: c.budget, steps: c.steps, permission: c.permission,
+    };
     default: return { mode };
   }
 }
@@ -218,7 +255,7 @@ export function runConfig() {
 /** Turkish error message or null. */
 export function validate() {
   if (!catalog.loaded) return 'Ajan listesi henüz yüklenmedi.';
-  if (!catalog.agents.some((a) => a.available)) return 'Kullanılabilir ajan yok. Ajanlar panelinden kurulum/giriş durumunu kontrol edin.';
+  if (!catalog.agents.some((a) => a.available)) return 'Kullanılabilir ajan yok. Ajanlar ve API’ler penceresinden kurulum/giriş durumunu kontrol edin.';
   const c = cfg();
   const check = (x, requireEdit, what) => {
     const why = unusable(getAgent(x?.agentId), requireEdit);
@@ -241,6 +278,15 @@ export function validate() {
       if (!c.workers.length) return 'En az bir çalışan seçin.';
       return check(c.planner, false, 'Planlayıcı') || c.workers.map((p) => check(p, false, 'Çalışan')).find(Boolean) || check(c.reviewer, false, 'Denetçi');
     case 'lead':
+      if (c.teamMode === 'auto') {
+        const t = autoTeamFor(c);
+        if (t.workers && !t.workers.length) {
+          return c.budget === 'free-only'
+            ? 'Kullanılabilir ücretsiz ajan yok. Ajanlar ve API\'ler penceresinden Groq, OpenRouter ya da Gemini gibi ücretsiz bir ajan bağlayın veya bütçeyi değiştirin.'
+            : 'Ekip için kullanılabilir alt ajan yok. Ajanlar ve API\'ler penceresinden bir ajan bağlayın.';
+        }
+        return check(c.lead, false, 'Yönetici');
+      }
       if (!c.workers.length) return 'En az bir alt ajan seçin.';
       return check(c.lead, false, 'Yönetici') || c.workers.map((p) => check(p, false, 'Alt ajan')).find(Boolean) || null;
     default:
@@ -250,42 +296,40 @@ export function validate() {
 
 // ---------------------------------------------------------------------------------------------
 
-let heroEl = null;
-
 function renderHero() {
   if (!heroEl) return;
   if (surface === 'chat') {
-    heroEl.replaceChildren(h('h1', { class: 'hero-title' }, 'Ne konuşalım?'),
+    heroEl.replaceChildren(title('ne konuşalım?'),
       h('span', { class: 'hero-proj hero-sub' }, icon('chat'), 'Sohbet · proje klasörü gerekmez'));
     return;
   }
   const info = ctx.cwdInfo;
   const proj = ctx.cwd
-    ? h('span', { class: 'hero-proj', title: ctx.cwd }, icon('folder'), basename(ctx.cwd),
+    ? h('button', { type: 'button', class: 'hero-proj', title: `${ctx.cwd}\nDeğiştirmek için tıklayın`, onclick: () => ctx.onPickFolder?.() }, icon('folder'), basename(ctx.cwd),
       info?.isGit && h('span', { class: 'hero-git' }, icon('branch'), info.branch || 'git'))
-    : h('span', { class: 'hero-proj warn' }, icon('folder'), 'Soldan bir proje klasörü seçin');
-  heroEl.replaceChildren(h('h1', { class: 'hero-title' }, 'Ne yapalım?'), proj);
+    : h('button', { type: 'button', class: 'hero-proj warn', onclick: () => ctx.onPickFolder?.() }, icon('folder'), 'Bir proje klasörü seçin');
+  heroEl.replaceChildren(title('ne yapalım?'), proj);
+}
+
+/** "✳ İyi akşamlar, ne yapalım?" */
+function title(question) {
+  const hr = new Date().getHours();
+  const word = hr < 6 ? 'İyi geceler' : hr < 12 ? 'Günaydın' : hr < 18 ? 'İyi günler' : 'İyi akşamlar';
+  return h('h1', { class: 'hero-title' },
+    h('span', { class: 'brand-mark hero-mark', 'aria-hidden': 'true' }, h('i'), h('i')),
+    h('span', { text: `${word}, ${question}` }));
 }
 
 function render() {
   if (!root) return;
-  heroEl = h('div', { class: 'hero' });
   renderHero();
-
-  const ids = SURFACE_MODE_IDS[surface];
-  const tabs = h('div', { class: `mode-tabs${surface === 'chat' ? ' mode-tabs-chat' : ''}`, role: 'tablist', 'aria-label': 'Çalışma modu' },
-    ids.map((m) => h('button', {
-      type: 'button',
-      role: 'tab',
-      class: `mode-tab${m === mode ? ' active' : ''}`,
-      'aria-selected': m === mode ? 'true' : 'false',
-      onclick: () => setMode(m),
-    }, icon(modeInfo(m, surface).icon), h('span', { text: modeInfo(m, surface).label }))));
-
-  const desc = h('p', { class: 'mode-desc', text: modeInfo(mode, surface).desc });
-  const card = h('div', { class: 'setup', role: 'tabpanel' });
+  const card = h('div', { class: 'setup' });
   buildSetup(card);
-  root.replaceChildren(heroEl, tabs, desc, card);
+  fill(restEl,
+    modeBar(),
+    h('p', { class: 'mode-desc', text: modeInfo(mode, surface).desc }),
+    card,
+    suggestions());
 }
 
 function setMode(m) {
@@ -296,6 +340,97 @@ function setMode(m) {
   render();
   ctx.onModeChange?.(m);
 }
+
+// ---- mode bar: the main modes as pills, the rest under "Diğer modlar" -------------------------
+
+let menuClose = null;
+
+function modeBar() {
+  const ids = SURFACE_MODE_IDS[surface];
+  const primary = surface === 'chat' ? ids : PRIMARY_MODES;
+  const others = ids.filter((m) => !primary.includes(m));
+  const pill = (m) => h('button', {
+    type: 'button',
+    class: `mode-pill${m === mode ? ' active' : ''}`,
+    'aria-pressed': m === mode ? 'true' : 'false',
+    title: modeInfo(m, surface).desc,
+    onclick: () => setMode(m),
+  }, icon(modeInfo(m, surface).icon), h('span', { text: modeInfo(m, surface).label }));
+  const bar = h('div', { class: 'mode-bar', role: 'group', 'aria-label': 'Çalışma modu' }, primary.map(pill));
+  if (!others.length) return bar;
+
+  const inOthers = others.includes(mode);
+  const menu = h('div', { class: 'menu mode-menu', role: 'menu', hidden: true },
+    h('div', { class: 'menu-t', text: 'Diğer modlar' }),
+    others.map((m) => h('button', {
+      type: 'button',
+      role: 'menuitemradio',
+      'aria-checked': m === mode ? 'true' : 'false',
+      class: `menu-item${m === mode ? ' active' : ''}`,
+      onclick: () => { close(); setMode(m); },
+    },
+    h('span', { class: 'mi-ico' }, icon(modeInfo(m, surface).icon)),
+    h('span', { class: 'mi-main' },
+      h('span', { class: 'mi-label', text: modeInfo(m, surface).label }),
+      h('span', { class: 'mi-desc', text: modeInfo(m, surface).short || modeInfo(m, surface).desc })),
+    m === mode && icon('check', 'mi-check'))));
+  const btn = h('button', {
+    type: 'button',
+    class: `mode-pill more${inOthers ? ' active' : ''}`,
+    'aria-haspopup': 'menu',
+    'aria-expanded': 'false',
+    onclick: (e) => { e.stopPropagation(); if (menu.hidden) open(); else close(); },
+  }, inOthers ? icon(modeInfo(mode, surface).icon) : icon('more'), h('span', { text: inOthers ? modeInfo(mode, surface).label : 'Diğer modlar' }), icon('down', 'chev'));
+  const onDoc = (e) => { if (!menu.contains(e.target) && e.target !== btn) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); } };
+  function open() {
+    menuClose?.();
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('click', onDoc, true);
+    document.addEventListener('keydown', onKey, true);
+    menuClose = close;
+    menu.querySelector('.menu-item')?.focus();
+  }
+  function close() {
+    menu.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', onDoc, true);
+    document.removeEventListener('keydown', onKey, true);
+    if (menuClose === close) menuClose = null;
+  }
+  bar.append(h('div', { class: 'menu-anchor' }, btn, menu));
+  return bar;
+}
+
+// ---- suggestions -----------------------------------------------------------------------------
+
+const SUGGEST = {
+  code: [
+    ['search', 'Projeyi incele', 'Bu projeyi incele: ne işe yaradığını, klasör yapısını ve önemli dosyaları kısaca özetle.'],
+    ['check', 'Testleri düzelt', 'Testleri çalıştır; kırık olanların nedenini bul ve düzelt.'],
+    ['file', 'README yaz', 'README dosyasını projenin şu anki hâline göre güncelle: kurulum, kullanım ve örnekler.'],
+    ['warn', 'Hata ara', 'Kodu hata, güvenlik açığı ve gözden kaçmış uç durumlar açısından gözden geçir; bulduklarını önem sırasıyla listele.'],
+  ],
+  chat: [
+    ['bulb', 'Fikir üret', 'Bir yan proje için 5 özgün fikir öner; her biri için kısa bir açıklama yaz.'],
+    ['chat', 'Basitçe açıkla', 'Bana bir kavramı 10 yaşındaki birine anlatır gibi açıkla: '],
+    ['file', 'Metin yaz', 'Şu konuda kısa ve net bir e-posta taslağı yaz: '],
+    ['code', 'Kodu açıkla', 'Şu kodun ne yaptığını adım adım açıkla:\n\n'],
+  ],
+};
+
+function suggestions() {
+  const list = SUGGEST[surface === 'chat' ? 'chat' : 'code'];
+  return h('div', { class: 'suggest' }, list.map(([ic, label, text]) => h('button', {
+    type: 'button',
+    class: 'suggest-chip',
+    title: text,
+    onclick: () => ctx.onSuggest?.(text),
+  }, icon(ic), h('span', { text: label }))));
+}
+
+// ---- setup -----------------------------------------------------------------------------------
 
 function field(label, control, hint) {
   return h('div', { class: 'field' },
@@ -308,7 +443,7 @@ function single(c, key, requireEdit, label) {
     value: c[key],
     requireEdit,
     label,
-    onChange: (v) => { c[key] = v; save(); },
+    onChange: (v) => { c[key] = v; save(); if (mode === 'lead' && key === 'lead') render(); },
   });
 }
 
@@ -340,20 +475,30 @@ function multi(c, key, requireEdit, addLabel, itemLabel) {
   return wrap;
 }
 
+/** Segmented control. `opts` = [{ id, label, title?, danger? }]; `get()` / `set(id)`. */
+function seg(opts, get, set, aria) {
+  const wrap = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': aria });
+  const draw = () => {
+    wrap.replaceChildren(...opts.map((o) => h('button', {
+      type: 'button',
+      role: 'radio',
+      title: o.title || '',
+      'aria-checked': o.id === get() ? 'true' : 'false',
+      class: `seg-btn${o.id === get() ? ' active' : ''}${o.danger ? ' danger' : ''}`,
+      onclick: () => { set(o.id); draw(); },
+    }, o.label)));
+  };
+  draw();
+  return wrap;
+}
+
 function permissionControl(c, allowed) {
   const wrap = h('div', { class: 'perm' });
   const draw = () => {
     const opts = PERMISSIONS.filter((p) => allowed.includes(p.id));
     const cur = opts.find((p) => p.id === c.permission) || opts[0];
     fill(wrap,
-      h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Yetki' },
-        opts.map((p) => h('button', {
-          type: 'button',
-          role: 'radio',
-          'aria-checked': p.id === cur.id ? 'true' : 'false',
-          class: `seg-btn${p.id === cur.id ? ' active' : ''}${p.id === 'full' ? ' danger' : ''}`,
-          onclick: () => { c.permission = p.id; save(); draw(); },
-        }, p.label))),
+      seg(opts.map((p) => ({ id: p.id, label: p.label, danger: p.id === 'full' })), () => cur.id, (id) => { c.permission = id; save(); draw(); }, 'Yetki'),
       h('div', { class: 'field-hint', text: cur.desc }),
       cur.id === 'full' && h('div', { class: 'danger-box', role: 'alert' }, icon('warn'),
         h('span', {}, h('strong', {}, 'Tam yetki: '), 'ajan onay istemeden, korumalı alan (sandbox) olmadan komut çalıştırabilir, dosya silebilir ve ağa erişebilir. Yalnızca güvendiğiniz projelerde ve yedeğiniz varken kullanın.')));
@@ -362,46 +507,101 @@ function permissionControl(c, allowed) {
   return wrap;
 }
 
+const nums = (list) => list.map((n) => ({ id: n, label: String(n) }));
+
 function roundsControl(c, label = 'Tur sayısı') {
-  const wrap = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label });
-  const draw = () => {
-    wrap.replaceChildren(...[1, 2, 3, 4].map((n) => h('button', {
-      type: 'button',
-      role: 'radio',
-      'aria-checked': n === c.rounds ? 'true' : 'false',
-      class: `seg-btn${n === c.rounds ? ' active' : ''}`,
-      onclick: () => { c.rounds = n; save(); draw(); },
-    }, String(n))));
-  };
-  draw();
-  return wrap;
+  return seg(nums([1, 2, 3, 4]), () => c.rounds, (n) => { c.rounds = n; save(); }, label);
 }
 
-function stepsControl(c) {
-  const wrap = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'En fazla denetim' });
-  const draw = () => {
-    wrap.replaceChildren(...[3, 5, 8, 12].map((n) => h('button', {
-      type: 'button',
-      role: 'radio',
-      'aria-checked': n === c.steps ? 'true' : 'false',
-      class: `seg-btn${n === c.steps ? ' active' : ''}`,
-      onclick: () => { c.steps = n; save(); draw(); },
-    }, String(n))));
+/** Collapsible "Gelişmiş" section (open state remembered). */
+function advanced(...children) {
+  const key = `adv.${surface}.${mode}`;
+  const d = h('details', { class: 'adv', open: !!store.get(key, false) },
+    h('summary', {}, icon('chevron', 'adv-chev'), 'Gelişmiş ayarlar'),
+    h('div', { class: 'adv-body' }, children));
+  d.addEventListener('toggle', () => store.set(key, d.open));
+  return d;
+}
+
+// ---- lead: automatic team preview ------------------------------------------------------------
+
+const autoCache = new Map(); // key -> { workers | null (loading), at }
+
+function autoKey(c) {
+  return `${c.budget}|${c.lead.agentId}|${c.lead.model || ''}|${catalog.agents.filter((a) => a.available).map((a) => a.id).join(',')}`;
+}
+
+/** { workers: [...] } when known, {} while loading (fetches /api/team/auto once per key). */
+function autoTeamFor(c) {
+  const key = autoKey(c);
+  const hit = autoCache.get(key);
+  if (hit) return hit;
+  const entry = {};
+  autoCache.set(key, entry);
+  api(`/api/team/auto?budget=${enc(c.budget)}&lead=${enc(c.lead.agentId)}&leadModel=${enc(c.lead.model || '')}`, { quiet: true })
+    .then((r) => { entry.workers = Array.isArray(r?.workers) ? r.workers : []; })
+    .catch(() => { entry.workers = null; autoCache.delete(key); })
+    .finally(() => { if (root?.isConnected && mode === 'lead') render(); });
+  return entry;
+}
+
+function teamPreview(c) {
+  const t = autoTeamFor(c);
+  if (!t.workers) return h('div', { class: 'team-prev loading' }, spinner('sm'), 'Ekip hazırlanıyor…');
+  if (!t.workers.length) {
+    return h('div', { class: 'setup-note warn' }, icon('warn'), c.budget === 'free-only'
+      ? 'Kullanılabilir ücretsiz ajan yok. Ajanlar ve API\'ler penceresinden Groq, OpenRouter ya da Gemini gibi ücretsiz bir ajan bağlayın.'
+      : 'Kullanılabilir alt ajan yok.');
+  }
+  return h('div', { class: 'team-prev' }, t.workers.map((w) => h('span', {
+    class: `team-chip${w.backup ? ' backup' : ''}`,
+    title: `${w.name} · ${w.modelLabel}${w.backup ? '\nYedek: yalnızca ücretsiz ajanlar başaramazsa kullanılır' : ''}`,
+  },
+  h('span', { class: `agent-av sm spk-${w.agentId}`, 'aria-hidden': 'true', text: w.name.charAt(0).toLocaleUpperCase('tr') }),
+  h('span', { class: 'tc-name' }, h('b', { text: w.name.replace(/\s*\(.*\)$/, '') }), ' ', shortModel(w.agentId, w.model)),
+  tierBadge(w.tier),
+  w.backup && h('span', { class: 'tc-backup', text: 'yedek' }))));
+}
+
+function leadSetup(card, c) {
+  const team = h('div', { class: 'team-box' });
+  const drawTeam = () => {
+    fill(team,
+      seg([
+        { id: 'auto', label: 'Otomatik', title: 'Ortak, aktif ajanlardan ekibi bütçeye göre kurar' },
+        { id: 'manual', label: 'Elle seç', title: 'Alt ajanları kendiniz seçin' },
+      ], () => c.teamMode, (id) => { c.teamMode = id; save(); drawTeam(); ctx.onModeChange?.(mode); }, 'Ekip'),
+      c.teamMode === 'auto'
+        ? [
+          h('div', { class: 'budget' },
+            h('span', { class: 'budget-l', text: 'Bütçe' }),
+            seg(BUDGETS.map((b) => ({ id: b.id, label: b.label, title: b.desc })), () => c.budget,
+              (id) => { c.budget = id; save(); drawTeam(); ctx.onModeChange?.(mode); }, 'Bütçe')),
+          h('div', { class: 'field-hint', text: BUDGETS.find((b) => b.id === c.budget)?.desc || '' }),
+          teamPreview(c),
+        ]
+        : multi(c, 'workers', false, 'Alt ajan ekle', 'Alt ajan'));
   };
-  draw();
-  return wrap;
+  drawTeam();
+  card.append(
+    field('Yönetici', single(c, 'lead', false, 'Yönetici'), 'Planlar, işi dağıtır ve denetler; kendisi kod yazmaz. Güçlü bir model seçin (ör. Opus).'),
+    field('Ekip', team),
+    advanced(
+      field('En fazla denetim', seg(nums([3, 5, 8, 12]), () => c.steps, (n) => { c.steps = n; save(); }, 'En fazla denetim'), 'Yönetici işler bitince (bir iş başarısız olursa hemen) sonuçları denetler ve gerekirse yeni görev verir.'),
+      field('Yetki', permissionControl(c, ['read-only', 'edit', 'full']))));
 }
 
 function buildSetup(card) {
   const c = cfg();
   if (!catalog.loaded) {
-    card.append(h('div', { class: 'empty small' }, 'Ajanlar yükleniyor…'));
+    card.append(h('div', { class: 'empty small' }, spinner('sm'), 'Ajanlar yükleniyor…'));
     return;
   }
   if (!catalog.agents.some((a) => a.available)) {
     card.append(h('div', { class: 'empty' },
       h('strong', {}, 'Kullanılabilir ajan bulunamadı.'),
-      h('div', {}, 'Claude Code, Codex, OpenCode, Kilo Code, GitHub Copilot, Junie veya Antigravity kurulu ve oturum açmış olmalı. Sol alttaki Ajanlar panelinden nedenleri görebilir ve yenileyebilirsiniz.')));
+      h('div', {}, 'Claude Code, Codex, Gemini, Groq, OpenRouter… en az biri kurulu ya da bağlı olmalı.'),
+      h('button', { type: 'button', class: 'btn btn-sm', onclick: () => ctx.onAgents?.() }, icon('key'), 'Ajanlar ve API\'ler')));
     return;
   }
   if (surface === 'chat') {
@@ -411,14 +611,17 @@ function buildSetup(card) {
   switch (mode) {
     case 'chat':
       card.append(
-        field('Ajan', single(c, 'agent', false, 'Ajan'), 'Gemini (4 Argon) gibi dosya araçları olmayan modellerde Ortak dosyaları okur, klasörlerde gezer, verdikleri değişiklikleri uygular ve istedikleri terminal komutlarını çalıştırır (yetkiye göre).'),
+        field('Model', single(c, 'agent', false, 'Ajan'), 'Dosya araçları olmayan modellerde (Gemini web, Groq, OpenRouter…) Ortak dosyaları okur, değişiklikleri uygular ve komutları çalıştırır.'),
         field('Yetki', permissionControl(c, ['read-only', 'edit', 'full'])));
+      break;
+    case 'lead':
+      leadSetup(card, c);
       break;
     case 'group':
       card.append(
         field('Katılımcılar', multi(c, 'participants', false, 'Katılımcı ekle', 'Katılımcı'), 'Sırayla konuşurlar; aynı ajanı farklı modellerle de ekleyebilirsiniz.'),
-        field('Konuşma uzunluğu', roundsControl(c, 'Konuşma uzunluğu'), 'Sizin her mesajınızdan sonra her ajan en fazla bu kadar kez söz alır; herkes uzlaşırsa daha erken biter.'),
-        h('div', { class: 'setup-note' }, icon('info'), 'Ajanlar birbirine @ad ile hitap eder; anılan ajan sıradaki konuşmacı olur. Grup sohbeti salt okunur çalışır.'));
+        field('Uzunluk', roundsControl(c, 'Konuşma uzunluğu'), 'Her mesajınızdan sonra her ajan en fazla bu kadar kez söz alır; herkes uzlaşırsa daha erken biter.'),
+        h('div', { class: 'setup-note' }, icon('info'), 'Ajanlar birbirine @ad ile hitap eder. Grup sohbeti salt okunur çalışır.'));
       break;
     case 'brainstorm':
       card.append(
@@ -443,17 +646,10 @@ function buildSetup(card) {
     case 'team':
       card.append(
         field('Planlayıcı', single(c, 'planner', false, 'Planlayıcı'), 'Görevi adımlara böler (salt okunur).'),
-        field('Çalışanlar', multi(c, 'workers', false, 'Çalışan ekle', 'Çalışan'), 'Adımları sırayla uygular.'),
-        field('Denetçi', single(c, 'reviewer', false, 'Denetçi'), 'Sonucu inceler; gerekirse bir düzeltme turu ister.'),
+        field('Çalışanlar', multi(c, 'workers', false, 'Çalışan ekle', 'Çalışan'), 'Adımları sırayla uygular; biri limite takılırsa adım sıradakine geçer.'),
+        field('Denetçi', single(c, 'reviewer', false, 'Denetçi'), 'Sonucu inceler; sorun bulursa düzeltme ister ve düzeltmeyi yeniden kontrol eder.'),
+        field('Düzeltme turu', seg(nums([1, 2, 3, 5]), () => c.fixRounds, (n) => { c.fixRounds = n; save(); }, 'En fazla düzeltme turu'), 'Denetçi onay verene kadar en fazla bu kadar düzeltme yapılır. Limit dolarsa takım durur; "devam et" ile kaldığı yerden sürer.'),
         field('Yetki', permissionControl(c, ['edit', 'full'])));
-      break;
-    case 'lead':
-      card.append(
-        field('Yönetici', single(c, 'lead', false, 'Yönetici'), 'Planlar, görev dağıtır ve denetler; kendisi dosya değiştirmez. Güçlü bir model seçin (ör. Opus).'),
-        field('Alt ajanlar', multi(c, 'workers', false, 'Alt ajan ekle', 'Alt ajan'), 'Yönetici her işi en uygun alt ajana verir. Bağımsız işler aynı anda çalışır; bir işe bağlı olan iş, o biter bitmez başlar. Her alt ajan aynı anda bir iş yapar.'),
-        field('En fazla denetim', stepsControl(c), 'Yönetici işler bitince (bir iş başarısız olursa hemen) sonuçları denetler ve gerekirse yeni görev verir. İş bitince erken durur.'),
-        field('Yetki', permissionControl(c, ['read-only', 'edit', 'full'])),
-        h('div', { class: 'setup-note' }, icon('info'), 'Gemini (web) gibi dosyalara erişemeyen alt ajanlar için dosyaları Ortak okur, önerdikleri değişiklikleri uygular ve istedikleri komutları (test vb.) çalıştırır.'));
       break;
     default:
       break;
@@ -464,13 +660,12 @@ function buildSetup(card) {
 function buildChatSetup(card, c) {
   switch (mode) {
     case 'chat':
-      card.append(
-        field('Model', single(c, 'agent', false, 'Model'), 'Her ajanın kendi modelleri: Claude, GPT (Codex), Gemini, Copilot, OpenCode ve Kilo’nun ücretsiz modelleri…'));
+      card.append(field('Model', single(c, 'agent', false, 'Model'), 'Claude, GPT (Codex), Gemini, Groq, OpenRouter, OpenCode ve Kilo’nun ücretsiz modelleri…'));
       break;
     case 'group':
       card.append(
         field('Katılımcılar', multi(c, 'participants', false, 'Katılımcı ekle', 'Katılımcı'), 'Sırayla konuşurlar; aynı ajanı farklı modellerle de ekleyebilirsiniz.'),
-        field('Konuşma uzunluğu', roundsControl(c, 'Konuşma uzunluğu'), 'Sizin her mesajınızdan sonra her model en fazla bu kadar kez söz alır; herkes uzlaşırsa daha erken biter.'));
+        field('Uzunluk', roundsControl(c, 'Konuşma uzunluğu'), 'Her mesajınızdan sonra her model en fazla bu kadar kez söz alır; herkes uzlaşırsa daha erken biter.'));
       break;
     case 'brainstorm':
       card.append(
@@ -481,5 +676,4 @@ function buildChatSetup(card, c) {
     default:
       break;
   }
-  card.append(h('div', { class: 'setup-note' }, icon('info'), 'Sohbet arayüzünde modeller dosyalara ve komutlara dokunmaz. Kod yazdırmak için soldan Kod arayüzüne geçin.'));
 }

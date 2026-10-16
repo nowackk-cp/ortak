@@ -4,7 +4,7 @@
 import { h, icon, spinner, setSafeHtml, fill } from './dom.js';
 import { renderMarkdown } from './markdown.js';
 import { renderDiff } from './diff.js';
-import { agentName, modelLabel, getAgent } from './agents.js';
+import { agentName, modelLabel, getAgent, tierBadge, modelTier } from './agents.js';
 import { MODES, LANE_STATUS, PERMISSIONS, roleLabel, modeInfo } from './modes.js';
 import { fmtInt, fmtCost, fmtDuration, fmtDate, truncate, basename, enc, copyText } from './util.js';
 import { api, toast } from './api.js';
@@ -122,14 +122,40 @@ function noteEl(text, level) {
 }
 
 function userEl(text, target, files, images) {
-  return h('div', { class: 'user-row' },
-    h('div', { class: 'user-bubble' },
-      target && h('div', { class: 'user-target', text: `→ ${target}` }),
-      images?.length > 0 && h('div', { class: 'user-images' },
-        images.map((im) => h('a', { href: im.url, target: '_blank', rel: 'noopener', title: im.name }, h('img', { src: im.url, alt: im.name })))),
-      files?.length > 0 && h('div', { class: 'user-files' },
-        files.map((f) => h('span', { class: 'user-file', title: f }, icon('file'), h('span', { class: 'attach-name', text: f })))),
-      text && h('div', { class: 'user-text', text })));
+  const bubble = h('div', { class: 'user-bubble' },
+    target && h('div', { class: 'user-target', text: `→ ${target}` }),
+    images?.length > 0 && h('div', { class: 'user-images' },
+      images.map((im) => h('a', { href: im.url, target: '_blank', rel: 'noopener', title: im.name }, h('img', { src: im.url, alt: im.name })))),
+    files?.length > 0 && h('div', { class: 'user-files' },
+      files.map((f) => h('span', { class: 'user-file', title: f }, icon('file'), h('span', { class: 'attach-name', text: f })))),
+    text && h('div', { class: 'user-text', text }));
+  // long prompts (pasted specs, logs) start folded
+  if (text && (text.length > 700 || text.split('\n').length > 10)) {
+    bubble.classList.add('clamped');
+    bubble.append(h('button', {
+      type: 'button',
+      class: 'link-btn',
+      onclick: (e) => { bubble.classList.toggle('clamped'); e.currentTarget.textContent = bubble.classList.contains('clamped') ? 'Tamamını göster' : 'Daralt'; },
+    }, 'Tamamını göster'));
+  }
+  return h('div', { class: 'user-row' }, bubble);
+}
+
+/** Machine-readable plan / task blocks (```json {"tasks"…} / {"steps"…}) — the notes show them. */
+function hideDecisionJson(t) {
+  return t
+    .replace(/^[ \t>*_]*KARAR[ \t*_]*[:：][ \t*_]*ONAY[ \t*_.!]*$/gim, '**✓ Karar: onay**')
+    .replace(/^[ \t>*_]*KARAR[ \t*_]*[:：][ \t*_]*DÜZELTME[ \t*_.!]*$/gim, '**↻ Karar: düzeltme gerekiyor**')
+    .replace(/```json[ \t]*\n\s*[{[][\s\S]*?```/gi, (m) => (/"(tasks|steps|done)"/.test(m) ? '' : m))
+    .replace(/```json[ \t]*\n\s*\{[^`]*$/i, (m) => (/"(tasks|steps|done)"/.test(m) ? '' : m))
+    .trim();
+}
+
+/** "Read README.md" / the last line of what the agent is writing — the folded card's preview. */
+function previewOf(text) {
+  const lines = String(text || '').replace(/```[\s\S]*?(```|$)/g, ' ').split('\n').map((l) => l.replace(/[#>*_`|]+/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const ozet = lines.reverse().find((l) => /^(ÖZET|OZET|KARAR)\s*:/i.test(l));
+  return truncate((ozet || lines[0] || '').replace(/^(ÖZET|OZET)\s*:\s*/i, ''), 160);
 }
 
 function speakerEl(name, model, handle, agentId) {
@@ -140,6 +166,14 @@ function speakerEl(name, model, handle, agentId) {
     model && h('span', { class: 'spk-model', text: model }),
     handle && h('span', { class: 'spk-handle', text: '@' + handle }));
 }
+
+/** Coloured initial; a ring spins around it while the agent works. */
+function avatarEl(name, agentId, busy) {
+  return h('span', { class: `lane-av spk-${String(agentId || '').replace(/[^a-z0-9_-]/gi, '')}${busy ? ' busy' : ''}`, 'aria-hidden': 'true', text: (name || '?').trim().charAt(0).toLocaleUpperCase('tr') });
+}
+
+const laneTier = (info) => info.tier || modelTier(info.agentId, info.model);
+const shortModel = (info) => modelLabel(info.agentId, info.model).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+—.*$/, '').replace(/\s*·\s*ücretsiz$/i, '').trim();
 
 const phaseEl = (title) => h('div', { class: 'phase', role: 'separator' }, h('span', { class: 'phase-t', text: title }));
 
@@ -153,6 +187,7 @@ class Block {
     this.tools = new Map();
     this.state = 'idle';
     this.statusText = '';
+    this.preview = ''; // one line for a folded lane card
     this.onChange = null;
   }
 
@@ -183,6 +218,8 @@ class Block {
 
   closeMsg(s) {
     if (!s.cur) return;
+    const p = previewOf(s.cur.transform ? s.cur.transform(s.cur.text) : s.cur.text);
+    if (p) this.preview = p;
     s.cur.el.classList.remove('streaming');
     this.view.dirty(s.cur);
     s.cur = null;
@@ -258,6 +295,7 @@ class Block {
         this.closeMsg(s);
         s.last = null;
         s.thinking = null;
+        this.preview = `${e.name || 'Araç'} ${toolSummary(e.input, this.view.cwd)}`.trim();
         const chip = new ToolChip(e.name, e.input, this.view.cwd);
         this.push(chip.el);
         this.tools.set(`${lane}\u0001${e.id ?? Math.random()}`, chip);
@@ -291,6 +329,7 @@ class Block {
         this.closeMsg(s);
         s.last = null;
         s.err = true;
+        this.preview = `Hata: ${e.message || 'bilinmeyen hata'}`;
         this.push(noteEl(e.message || 'Bilinmeyen hata', 'error'));
         this.setState('error');
         break;
@@ -349,7 +388,11 @@ export class RunView {
     this.speakers = []; // group: [{ lane, el }] speaker headers, re-labelled when the catalog loads
     this.lastSpeaker = null;
     // group: show the agents' consensus marker as a short label instead of the raw token
-    this.msgTransform = this.mode === 'group' ? (t) => t.split('[UZLAŞI]').join('✓ *uzlaştı*') : null;
+    this.msgTransform = this.mode === 'group' ? (t) => t.split('[UZLAŞI]').join('✓ *uzlaştı*')
+      : this.mode === 'lead' || this.mode === 'team' ? hideDecisionJson : null;
+    // lead / team: one folded card per agent and phase (like a chat app's "working" steps);
+    // parallel / brainstorm keep side-by-side columns to compare answers.
+    this.stack = this.mode === 'lead' || this.mode === 'team';
     this.cwd = meta.cwd || '';
     this.hooks = hooks;
     this.status = meta.status || 'running';
@@ -372,7 +415,7 @@ export class RunView {
     this.stick = true;
     this.scroller = scroller;
 
-    this.el = h('div', { class: `run run-${this.mode}` });
+    this.el = h('div', { class: `run run-${this.mode}${this.stack ? ' run-stack' : ''}` });
     this.connEl = h('div', { class: 'conn', hidden: true }, spinner(), 'Bağlantı koptu, yeniden bağlanılıyor…');
     this.jumpBtn = h('button', { type: 'button', class: 'jump-btn', hidden: true, title: 'En alta git', 'aria-label': 'En alta git', onclick: () => this.scrollBottom(true) }, icon('arrowDown'));
     this.el.append(this.connEl, this.infoEl());
@@ -443,15 +486,9 @@ export class RunView {
     this.lanesBar = h('div', { class: 'lanes-bar' });
     this.sectionsEl = h('div', { class: 'sections' });
     let task = null;
-    if (this.prompt || this.promptFiles.length) {
-      const text = h('div', { class: 'task-text', text: this.prompt });
-      const files = this.promptFiles.length > 0 && h('div', { class: 'user-files' },
-        this.promptFiles.map((f) => h('span', { class: 'user-file', title: f }, icon('file'), h('span', { class: 'attach-name', text: f }))));
-      task = h('div', { class: 'task-card' }, h('div', { class: 'task-label' }, icon('user'), 'Görev'), files, text);
-      if (this.prompt.length > 360 || this.prompt.split('\n').length > 6) {
-        task.classList.add('clamped');
-        task.append(h('button', { type: 'button', class: 'link-btn', onclick: (e) => { task.classList.toggle('clamped'); e.currentTarget.textContent = task.classList.contains('clamped') ? 'Tamamını göster' : 'Daralt'; } }, 'Tamamını göster'));
-      }
+    if (this.prompt || this.promptFiles.length || this.promptImages.length) {
+      task = userEl(this.prompt, null, this.promptFiles, this.promptImages);
+      task.classList.add('task-row');
     } else {
       this.promptSeen = true;
     }
@@ -520,7 +557,7 @@ export class RunView {
   declareLane(p) {
     const lane = String(p.lane ?? p.agentId ?? '?');
     const info = this.lanes.get(lane) || { lane, state: 'idle', err: false };
-    for (const k of ['agentId', 'model', 'role', 'title', 'branch', 'worktree']) if (p[k] != null && p[k] !== '') info[k] = p[k];
+    for (const k of ['agentId', 'model', 'role', 'title', 'tier', 'branch', 'worktree']) if (p[k] != null && p[k] !== '') info[k] = p[k];
     if (!info.agentId) info.agentId = lane.split('#')[0];
     this.lanes.set(lane, info);
     this.hooks.onLanes?.(this);
@@ -543,9 +580,11 @@ export class RunView {
       title: `${this.laneTip(info)}\n${LANE_STATUS[info.state] || info.state}`,
       onclick: () => this.revealLane(info.lane),
     },
-    info.state === 'running' ? spinner('sm') : h('span', { class: 'dot' }),
+    avatarEl(this.laneLabel(info), info.agentId, info.state === 'running'),
     h('span', { class: 'lc-name', text: this.laneLabel(info) }),
-    info.role && h('span', { class: 'lc-role', text: roleLabel(info.role) })));
+    h('span', { class: 'lc-model', text: shortModel(info) }),
+    info.role && info.role !== 'worker' && h('span', { class: 'lc-role', text: roleLabel(info.role) }),
+    tierBadge(laneTier(info))));
     this.lanesBar.replaceChildren(...chips);
     this.lanesBar.hidden = !chips.length;
   }
@@ -618,7 +657,7 @@ export class RunView {
     const existing = sec.cols.get(lane);
     if (existing) return existing.block;
     if (!sec.grid) {
-      sec.grid = h('div', { class: 'lane-grid' });
+      sec.grid = h('div', { class: this.stack ? 'lane-stack' : 'lane-grid' });
       sec.el.insertBefore(sec.grid, sec.after);
     }
     if (!this.lanes.has(lane)) this.declareLane({ lane });
@@ -631,6 +670,24 @@ export class RunView {
       el: null,
     };
     col.el = h('div', { class: 'lane-col', dataset: { lane } }, col.head, block.el, col.foot);
+    if (this.stack) {
+      // folded by default, except the lead / reviewer (their text is the answer)
+      const role = this.lanes.get(lane)?.role;
+      col.open = role === 'lead' || role === 'reviewer';
+      col.el.classList.toggle('folded', !col.open);
+      col.prev = h('div', { class: 'lane-prev' });
+      col.head.setAttribute('role', 'button');
+      col.head.tabIndex = 0;
+      const toggle = () => {
+        col.open = !col.open;
+        col.el.classList.toggle('folded', !col.open);
+        col.head.setAttribute('aria-expanded', String(col.open));
+      };
+      col.head.addEventListener('click', (e) => { if (!e.target.closest('a, button')) toggle(); });
+      col.head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+      col.head.setAttribute('aria-expanded', String(col.open));
+      col.el.insertBefore(col.prev, block.el);
+    }
     block.onChange = () => this.renderColHead(col);
     sec.cols.set(lane, col);
     const order = [...this.lanes.keys()];
@@ -648,14 +705,34 @@ export class RunView {
     const st = col.block.state;
     col.el.dataset.state = st;
     col.head.title = this.laneTip(info);
-    fill(col.head,
-      h('span', { class: 'lh-name', text: this.laneLabel(info) }),
-      h('span', { class: 'lh-model', text: modelLabel(info.agentId, info.model) }),
-      info.role && h('span', { class: 'lh-role', text: roleLabel(info.role) }),
-      h('span', { class: `pill st-${st}` }, st === 'running' ? spinner('sm') : h('span', { class: 'dot' }), LANE_STATUS[st] || st));
+    if (this.stack) {
+      fill(col.head,
+        icon('chevron', 'lh-chev'),
+        avatarEl(this.laneLabel(info), info.agentId, st === 'running' && this.status === 'running'),
+        h('span', { class: 'lh-name', text: this.laneLabel(info) }),
+        h('span', { class: 'lh-model', text: shortModel(info) }),
+        info.role && info.role !== 'worker' && h('span', { class: 'lh-role', text: roleLabel(info.role) }),
+        tierBadge(laneTier(info)),
+        h('span', { class: `pill st-${st}` }, st === 'running' ? spinner('sm') : h('span', { class: 'dot' }), LANE_STATUS[st] || st));
+      this.paintPreview(col);
+    } else {
+      fill(col.head,
+        h('span', { class: 'lh-name', text: this.laneLabel(info) }),
+        h('span', { class: 'lh-model', text: modelLabel(info.agentId, info.model) }),
+        info.role && h('span', { class: 'lh-role', text: roleLabel(info.role) }),
+        h('span', { class: `pill st-${st}` }, st === 'running' ? spinner('sm') : h('span', { class: 'dot' }), LANE_STATUS[st] || st));
+    }
     const show = st === 'running' && this.status === 'running';
     col.foot.hidden = !show;
     if (show) col.foot.replaceChildren(spinner('sm'), h('span', { text: col.block.statusText || 'Çalışıyor…' }));
+  }
+
+  /** The folded card's one-line preview: what the agent is doing now, or its summary. */
+  paintPreview(col) {
+    if (!col.prev) return;
+    const running = col.block.state === 'running' && this.status === 'running';
+    const text = (running && col.block.statusText) || col.block.preview || (running ? 'Çalışıyor…' : '');
+    if (col.prev.textContent !== text) col.prev.textContent = text;
   }
 
   allBlocks() {
@@ -957,6 +1034,7 @@ export class RunView {
     this.lastFlush = performance.now();
     for (const m of this.dirtySet) m.render();
     this.dirtySet.clear();
+    if (this.stack) for (const sec of this.sections) for (const c of sec.cols.values()) this.paintPreview(c);
     this.updateStatusLine();
     if (this.stick) this.scrollBottom(false);
   }
