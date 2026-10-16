@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 450" width="960" height="450" role="img" aria-label="Sahne: Yönetici modu — Claude Opus işi böler, alt ajanlar paralel çalışır">
+<title>Sahne: Yönetici modu — Claude Opus işi böler, alt ajanlar paralel çalışır</title>
+<style>text{font-family:'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif}.mono{font-family:ui-monospace,'Cascadia Code',Consolas,'SF Mono',Menlo,monospace}.muted{fill:#8b949e}
+.flow{stroke-dasharray:5 7;animation:flow 1.1s linear infinite}@keyframes flow{to{stroke-dashoffset:-24}}
+.blink{animation:blink 1s steps(1) infinite}@keyframes blink{50%{opacity:0}}
+.spin{animation:spin 1s linear infinite;transform-origin:center;transform-box:fill-box}@keyframes spin{to{transform:rotate(360deg)}}
+.dots circle{animation:dot 1.2s infinite}.dots circle:nth-child(2){animation-delay:.2s}.dots circle:nth-child(3){animation-delay:.4s}
+@keyframes dot{0%,60%,100%{opacity:.25}30%{opacity:1}}@keyframes k0{0%,18.82%{opacity:0;transform:translateY(0px)}20.88%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k0{animation:k0 17s infinite both}@keyframes k1{0%,20.00%{opacity:0;transform:translateY(6px)}22.06%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k1{animation:k1 17s infinite both}@keyframes k2{0%,22.35%{transform:scaleX(0)}42.35%,97.06%{transform:scaleX(1)}100%{transform:scaleX(0)}}.k2{animation:k2 17s infinite both;transform-origin:left;transform-box:fill-box}@keyframes k3{0%,42.35%{opacity:0;transform:translateY(0px)}44.41%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k3{animation:k3 17s infinite both}@keyframes k4{0%,41.76%{opacity:0;transform:translateY(6px)}43.82%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k4{animation:k4 17s infinite both}@keyframes k5{0%,44.12%{transform:scaleX(0)}62.94%,97.06%{transform:scaleX(1)}100%{transform:scaleX(0)}}.k5{animation:k5 17s infinite both;transform-origin:left;transform-box:fill-box}@keyframes k6{0%,62.94%{opacity:0;transform:translateY(0px)}65.00%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k6{animation:k6 17s infinite both}@keyframes k7{0%,20.00%{opacity:0;transform:translateY(6px)}22.06%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k7{animation:k7 17s infinite both}@keyframes k8{0%,18.82%{opacity:0;transform:translateY(0px)}20.88%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k8{animation:k8 17s infinite both}@keyframes k9{0%,20.00%{opacity:0;transform:translateY(6px)}22.06%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k9{animation:k9 17s infinite both}@keyframes k10{0%,22.35%{transform:scaleX(0)}55.29%,97.06%{transform:scaleX(1)}100%{transform:scaleX(0)}}.k10{animation:k10 17s infinite both;transform-origin:left;transform-box:fill-box}@keyframes k11{0%,55.29%{opacity:0;transform:translateY(0px)}57.35%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k11{animation:k11 17s infinite both}@keyframes k12{0%,20.00%{opacity:0;transform:translateY(6px)}22.06%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k12{animation:k12 17s infinite both}@keyframes k13{0%,18.82%{opacity:0;transform:translateY(0px)}20.88%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k13{animation:k13 17s infinite both}@keyframes k14{0%,20.00%{opacity:0;transform:translateY(6px)}22.06%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k14{animation:k14 17s infinite both}@keyframes k15{0%,22.35%{transform:scaleX(0)}37.65%,97.06%{transform:scaleX(1)}100%{transform:scaleX(0)}}.k15{animation:k15 17s infinite both;transform-origin:left;transform-box:fill-box}@keyframes k16{0%,37.65%{opacity:0;transform:translateY(0px)}39.71%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k16{animation:k16 17s infinite both}@keyframes k17{0%,20.00%{opacity:0;transform:translateY(6px)}22.06%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k17{animation:k17 17s infinite both}@keyframes k18{0%,1.76%{opacity:0;transform:translateY(6px)}3.82%,15.29%{opacity:1;transform:none}17.06%,100%{opacity:0;transform:none}}.k18{animation:k18 17s infinite both}@keyframes k19{0%,17.06%{opacity:0;transform:translateY(6px)}19.12%,70.59%{opacity:1;transform:none}72.35%,100%{opacity:0;transform:none}}.k19{animation:k19 17s infinite both}@keyframes k20{0%,72.35%{opacity:0;transform:translateY(6px)}74.41%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k20{animation:k20 17s infinite both}@keyframes k21{0%,78.82%{opacity:0;transform:translateY(6px)}80.88%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k21{animation:k21 17s infinite both}@keyframes k22{0%,20.00%{opacity:0;transform:translateY(6px)}22.06%,97.06%{opacity:1;transform:none}98.82%,100%{opacity:0;transform:none}}.k22{animation:k22 17s infinite both}</style>
+<defs>
+<linearGradient id="argon" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8df9"/><stop offset="1" stop-color="#a371f7"/></linearGradient>
+<linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffa657"/><stop offset=".5" stop-color="#f778ba"/><stop offset="1" stop-color="#a371f7"/></linearGradient>
+<radialGradient id="glow"><stop offset="0" stop-color="#a371f7" stop-opacity=".35"/><stop offset="1" stop-color="#a371f7" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="960" height="450" rx="14" fill="#0d1117"/>
+<rect x=".5" y=".5" width="959" height="449" rx="14" fill="none" stroke="#30363d"/>
+<circle cx="22" cy="22" r="6" fill="#ff5f57"/><circle cx="42" cy="22" r="6" fill="#febc2e"/><circle cx="62" cy="22" r="6" fill="#28c840"/>
+<text x="480" y="27" text-anchor="middle" font-size="13" class="muted">Ortak — Kod · Yönetici modu</text>
+<line x1="0" y1="44" x2="960" y2="44" stroke="#21262d"/>
+<g fill="#e6edf3">
+<g transform="translate(296 62)"><rect width="368" height="74" rx="14" fill="#2a1a14" stroke="#d97757" stroke-opacity=".8"/>
+<circle cx="30" cy="37" r="15" fill="#d97757"/><text x="30" y="41.5" text-anchor="middle" font-size="14" font-weight="700" fill="#0d1117">O</text>
+<text x="56" y="31" font-size="15" font-weight="700">Yönetici · Claude Opus</text>
+<text x="56" y="54" font-size="13" class="muted k18">Projeyi okuyor<tspan class="dots"> …</tspan></text>
+<text x="56" y="54" font-size="13" class="k19"><tspan fill="#d29922">Plan:</tspan> 4 iş → 3 ajan · bağımsızlar paralel</text>
+<text x="56" y="54" font-size="13" class="k20"><tspan fill="#3fb950">✓</tspan> Diff'leri inceledi, hepsi onaylandı</text></g>
+<path d="M480 136 C480 168 170 160 170 196" stroke="#d97757" stroke-opacity=".55" stroke-width="1.5" fill="none" class="flow k0"/><path d="M480 136 C480 168 480 160 480 196" stroke="#d97757" stroke-opacity=".55" stroke-width="1.5" fill="none" class="flow k8"/><path d="M480 136 C480 168 790 160 790 196" stroke="#d97757" stroke-opacity=".55" stroke-width="1.5" fill="none" class="flow k13"/>
+<g transform="translate(32 196)"><g class="k7">
+<rect width="276" height="150" rx="12" fill="#161b22" stroke="#30363d"/>
+<circle cx="26" cy="26" r="12" fill="url(#argon)"/><text x="26" y="30.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0d1117">A</text><text x="46" y="31" font-size="14" font-weight="700">Gemini 4 Argon</text>
+<g transform="translate(16 58)"><g class="k1">
+<text x="0" y="0" font-size="13">1 · fiyat hesapları</text>
+<rect x="0" y="12" width="210" height="7" rx="3.5" fill="#21262d"/>
+<rect x="0" y="12" width="210" height="7" rx="3.5" fill="#3fb950" class="k2"/>
+<text x="232" y="20" font-size="14" fill="#3fb950" font-weight="700" class="k3">✓</text></g></g><g transform="translate(16 114)"><g class="k4">
+<text x="0" y="0" font-size="13">4 · birim testleri<tspan class="muted" font-size="11">  (after: 1)</tspan></text>
+<rect x="0" y="12" width="210" height="7" rx="3.5" fill="#21262d"/>
+<rect x="0" y="12" width="210" height="7" rx="3.5" fill="#3fb950" class="k5"/>
+<text x="232" y="20" font-size="14" fill="#3fb950" font-weight="700" class="k6">✓</text></g></g></g></g><g transform="translate(342 196)"><g class="k12">
+<rect width="276" height="150" rx="12" fill="#161b22" stroke="#30363d"/>
+<circle cx="26" cy="26" r="12" fill="#10a37f"/><text x="26" y="30.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0d1117">G</text><text x="46" y="31" font-size="14" font-weight="700">GPT-6.1 Sol</text>
+<g transform="translate(16 58)"><g class="k9">
+<text x="0" y="0" font-size="13">2 · API uç noktası</text>
+<rect x="0" y="12" width="210" height="7" rx="3.5" fill="#21262d"/>
+<rect x="0" y="12" width="210" height="7" rx="3.5" fill="#3fb950" class="k10"/>
+<text x="232" y="20" font-size="14" fill="#3fb950" font-weight="700" class="k11">✓</text></g></g></g></g><g transform="translate(652 196)"><g class="k17">
+<rect width="276" height="150" rx="12" fill="#161b22" stroke="#30363d"/>
+<circle cx="26" cy="26" r="12" fill="#d97757"/><text x="26" y="30.5" text-anchor="middle" font-size="11" font-weight="700" fill="#0d1117">H</text><text x="46" y="31" font-size="14" font-weight="700">Claude Haiku</text>
+<g transform="translate(16 58)"><g class="k14">
+<text x="0" y="0" font-size="13">3 · README + belgeler</text>
+<rect x="0" y="12" width="210" height="7" rx="3.5" fill="#21262d"/>
+<rect x="0" y="12" width="210" height="7" rx="3.5" fill="#3fb950" class="k15"/>
+<text x="232" y="20" font-size="14" fill="#3fb950" font-weight="700" class="k16">✓</text></g></g></g></g>
+<g transform="translate(250 372)"><g class="k21">
+<rect width="460" height="44" rx="22" fill="#1a2b1f" stroke="#3fb950" stroke-opacity=".6"/>
+<text x="230" y="27.5" text-anchor="middle" font-size="15"><tspan fill="#3fb950" font-weight="700">✓ Bitti</tspan> — 4/4 iş · 7 dosya · 2 dk 14 sn</text></g></g>
+<text x="480" y="436" text-anchor="middle" font-size="11.5" class="muted k22">Yönetici kod yazmaz: böler, dağıtır, denetler. Bağımlı iş (after) öncekisi biter bitmez başlar.</text></g>
+</svg>

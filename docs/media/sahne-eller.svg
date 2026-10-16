@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 530" width="960" height="530" role="img" aria-label="Sahne: Gemini 4 Argon, Ortak aracılığıyla arar, okur, düzeltir ve testleri çalıştırır">
+<title>Sahne: Gemini 4 Argon, Ortak aracılığıyla arar, okur, düzeltir ve testleri çalıştırır</title>
+<style>text{font-family:'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,sans-serif}.mono{font-family:ui-monospace,'Cascadia Code',Consolas,'SF Mono',Menlo,monospace}.muted{fill:#8b949e}
+.flow{stroke-dasharray:5 7;animation:flow 1.1s linear infinite}@keyframes flow{to{stroke-dashoffset:-24}}
+.blink{animation:blink 1s steps(1) infinite}@keyframes blink{50%{opacity:0}}
+.spin{animation:spin 1s linear infinite;transform-origin:center;transform-box:fill-box}@keyframes spin{to{transform:rotate(360deg)}}
+.dots circle{animation:dot 1.2s infinite}.dots circle:nth-child(2){animation-delay:.2s}.dots circle:nth-child(3){animation-delay:.4s}
+@keyframes dot{0%,60%,100%{opacity:.25}30%{opacity:1}}@keyframes k0{0%,1.11%{opacity:0;transform:translateY(6px)}3.06%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k0{animation:k0 18s infinite both}@keyframes k1{0%{transform:translateX(0)}2.78%{transform:translateX(0);animation-timing-function:steps(30,end)}10.56%,99.94%{transform:translateX(274.5px)}100%{transform:translateX(0)}}.k1{animation:k1 18s infinite both}@keyframes k2{0%,1.11%{opacity:0;transform:translateY(6px)}3.06%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k2{animation:k2 18s infinite both}@keyframes k3{0%,13.33%{opacity:0;transform:translateY(6px)}15.28%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k3{animation:k3 18s infinite both}@keyframes k4{0%,18.89%{opacity:0;transform:translateY(6px)}20.83%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k4{animation:k4 18s infinite both}@keyframes k5{0%,26.67%{opacity:0;transform:translateY(6px)}28.61%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k5{animation:k5 18s infinite both}@keyframes k6{0%,32.22%{opacity:0;transform:translateY(6px)}34.17%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k6{animation:k6 18s infinite both}@keyframes k7{0%,40.56%{opacity:0;transform:translateY(6px)}42.50%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k7{animation:k7 18s infinite both}@keyframes k8{0%,48.89%{opacity:0;transform:translateY(6px)}50.83%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k8{animation:k8 18s infinite both}@keyframes k9{0%,57.22%{opacity:0;transform:translateY(6px)}59.17%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k9{animation:k9 18s infinite both}@keyframes k10{0%,62.22%{opacity:0;transform:translateY(6px)}64.17%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k10{animation:k10 18s infinite both}@keyframes k11{0%,62.22%{opacity:0;transform:translateY(0px)}64.17%,68.89%{opacity:1;transform:none}70.56%,100%{opacity:0;transform:none}}.k11{animation:k11 18s infinite both}@keyframes k12{0%,69.44%{opacity:0;transform:translateY(0px)}71.39%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k12{animation:k12 18s infinite both}@keyframes k13{0%,75.56%{opacity:0;transform:translateY(6px)}77.50%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k13{animation:k13 18s infinite both}@keyframes k14{0%,13.33%{opacity:0;transform:translateY(6px)}15.28%,97.22%{opacity:1;transform:none}98.89%,100%{opacity:0;transform:none}}.k14{animation:k14 18s infinite both}</style>
+<defs>
+<linearGradient id="argon" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8df9"/><stop offset="1" stop-color="#a371f7"/></linearGradient>
+<linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffa657"/><stop offset=".5" stop-color="#f778ba"/><stop offset="1" stop-color="#a371f7"/></linearGradient>
+<radialGradient id="glow"><stop offset="0" stop-color="#a371f7" stop-opacity=".35"/><stop offset="1" stop-color="#a371f7" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="960" height="530" rx="14" fill="#0d1117"/>
+<rect x=".5" y=".5" width="959" height="529" rx="14" fill="none" stroke="#30363d"/>
+<circle cx="22" cy="22" r="6" fill="#ff5f57"/><circle cx="42" cy="22" r="6" fill="#febc2e"/><circle cx="62" cy="22" r="6" fill="#28c840"/>
+<text x="480" y="27" text-anchor="middle" font-size="13" class="muted">Ortak — Kod · Sohbet · Gemini 4 Argon</text>
+<line x1="0" y1="44" x2="960" y2="44" stroke="#21262d"/>
+<g fill="#e6edf3">
+<g transform="translate(653.5 62)"><g class="k0">
+<rect width="274.5" height="38" rx="12" fill="#1c2d4a" stroke="#1f6feb" stroke-opacity=".6"/>
+<clipPath id="c1"><rect x="0" y="0" width="274.5" height="38" rx="12"/></clipPath>
+<g clip-path="url(#c1)"><text x="18" y="24.5" font-size="15">Testler kırık, düzeltir misin?</text>
+<rect x="12" y="4" width="274.5" height="30" fill="#1c2d4a" class="k1"/></g></g></g>
+<text x="928" y="116" text-anchor="end" font-size="11" class="muted k2">Sen · Kod modu · Düzenleme yetkisi</text>
+<g transform="translate(0 128)"><g class="k3"><circle cx="44" cy="16" r="13" fill="url(#argon)"/><text x="44" y="20.5" text-anchor="middle" font-size="12" font-weight="700" fill="#0d1117">A</text>
+<text x="72" y="21" font-size="14" class="mono"><tspan fill="#d2a8ff" font-weight="700">GREP: </tspan><tspan>indirimHesapla</tspan></text></g></g>
+<g transform="translate(72 164)"><g class="k4">
+<rect width="600" height="32" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="14" y="21" font-size="13">🔍</text>
+<text x="38" y="21" font-size="12.5" font-weight="700" class="muted">Ortak: ara</text>
+<text x="118.25" y="21" font-size="12.5" class="mono" fill="#8b949e">src/fiyat.js:1503  ·  1 eşleşme</text></g></g>
+<g transform="translate(0 208)"><g class="k5"><circle cx="44" cy="16" r="13" fill="url(#argon)"/><text x="44" y="20.5" text-anchor="middle" font-size="12" font-weight="700" fill="#0d1117">A</text>
+<text x="72" y="21" font-size="14" class="mono"><tspan fill="#d2a8ff" font-weight="700">READ: </tspan><tspan>src/fiyat.js:1495-1515</tspan></text></g></g>
+<g transform="translate(72 244)"><g class="k6">
+<rect width="600" height="32" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="14" y="21" font-size="13">📄</text>
+<text x="38" y="21" font-size="12.5" font-weight="700" class="muted">Ortak: oku</text>
+<text x="118.25" y="21" font-size="12.5" class="mono" fill="#8b949e">src/fiyat.js  ·  satır 1495–1515 (3002 satırdan 21’i)</text></g></g>
+<g transform="translate(72 290)"><g class="k7">
+<rect width="600" height="66" rx="8" fill="#0b0f14" stroke="#30363d"/>
+<text x="14" y="19" font-size="11" class="muted mono">src/fiyat.js</text>
+<rect x="8" y="26" width="584" height="17" fill="#f85149" fill-opacity=".14"/>
+<text x="14" y="39" font-size="13" class="mono" fill="#ffa198">-   return fiyat * oran;</text>
+<rect x="8" y="44" width="584" height="17" fill="#3fb950" fill-opacity=".14"/>
+<text x="14" y="57" font-size="13" class="mono" fill="#7ee787">+   return fiyat * (1 - oran);</text></g></g>
+<g transform="translate(72 366)"><g class="k8">
+<rect width="600" height="34" rx="8" fill="#1a2b1f" stroke="#3fb950" stroke-opacity=".5"/>
+<text x="14" y="22" font-size="13">✎  <tspan font-weight="700">1 dosya değişti</tspan><tspan class="muted"> — src/fiyat.js</tspan></text>
+<rect x="500" y="6" width="88" height="22" rx="6" fill="#21262d" stroke="#30363d"/><text x="544" y="21.5" text-anchor="middle" font-size="12">↶ Geri al</text></g></g>
+<g transform="translate(0 410)"><g class="k9"><circle cx="44" cy="16" r="13" fill="url(#argon)"/><text x="44" y="20.5" text-anchor="middle" font-size="12" font-weight="700" fill="#0d1117">A</text>
+<text x="72" y="21" font-size="14" class="mono"><tspan fill="#d2a8ff" font-weight="700">RUN: </tspan><tspan>npm test</tspan></text></g></g>
+<g transform="translate(72 446)"><g class="k10">
+<rect width="600" height="32" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="14" y="21" font-size="13">⌨</text><text x="38" y="21" font-size="12.5" font-weight="700" class="muted">Ortak: komut</text>
+<g transform="translate(140 9)"><g class="k11"><circle cx="7" cy="7" r="6" fill="none" stroke="#8b949e" stroke-width="2" stroke-dasharray="20 18" class="spin"/></g></g>
+<text x="140" y="21" font-size="12.5" class="mono k12"><tspan fill="#3fb950">✓ 12 test geçti</tspan><tspan class="muted">  ·  çıkış kodu 0  ·  1,8 sn</tspan></text></g></g>
+<g transform="translate(0 488)"><g class="k13"><circle cx="44" cy="16" r="13" fill="url(#argon)"/><text x="44" y="20.5" text-anchor="middle" font-size="12" font-weight="700" fill="#0d1117">A</text>
+<text x="72" y="21" font-size="14.5">Düzeltildi: indirim oranı <tspan font-weight="700">ters</tspan> uygulanıyordu. Testlerin hepsi geçiyor. ✅</text></g></g>
+<g transform="translate(722 136)"><g class="k14"><rect width="206" height="96" rx="10" fill="#161b22" stroke="#30363d" stroke-dasharray="4 4"/>
+<text x="14" y="24" font-size="12" font-weight="700" fill="#d2a8ff">Gemini 4 Argon</text>
+<text x="14" y="44" font-size="11.5" class="muted">kendi aracı yok — sadece yazı</text>
+<text x="14" y="64" font-size="11.5" class="muted">Ortak onun <tspan fill="#e6edf3" font-weight="700">elleri</tspan> olur:</text>
+<text x="14" y="83" font-size="11" class="mono" fill="#58a6ff">LIST READ GREP RUN ✎</text></g></g></g>
+</svg>

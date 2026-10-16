@@ -1,7 +1,7 @@
 {
   "name": "ortak",
   "version": "0.1.0",
-  "description": "Claude Code, Codex ve Antigravity'yi tek yerden yöneten çoklu-ajan kodlama uygulaması",
+  "description": "Bilgisayarındaki yapay zekâ kodlama ajanlarını (Claude Code, Codex, Gemini, Antigravity, Copilot…) tek yerden yöneten çoklu-ajan uygulaması",
   "type": "module",
   "private": true,
   "engines": { "node": ">=22" },
