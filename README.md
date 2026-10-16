@@ -90,6 +90,8 @@ sequenceDiagram
 Yönetici model **kod yazmaz**. Projeyi okur, işi parçalara böler, her parçayı en uygun ajana verir, diff'leri denetler, eksik varsa geri gönderir.
 Birbirinden bağımsız işler **aynı anda** başlar. Bir işe bağlı olan iş (`after`) o iş biter bitmez başlar.
 
+**Limitini koru.** Ekip varsayılan olarak **otomatik** kurulur: Ortak bilgisayarındaki aktif ajanlara ve API'lere bakar, her modelin **ücretsiz**, **abonelik** ya da **ücretli** olduğunu bilir. "Ücretsiz öncelikli" bütçede işi Groq, OpenRouter, Gemini gibi ücretsiz modeller yapar; Claude / ChatGPT yalnızca planlar ve denetler. Ücretsiz bir ajanın limiti dolarsa görevi Ortak kendiliğinden başka bir ücretsiz ajana devreder. Sonuçta hangi işin hangi sınıfta yapıldığı ve yöneticinin kaç tur düşündüğü yazılır.
+
 <details>
 <summary><b>▸ Limit dolarsa ne olur?</b></summary>
 

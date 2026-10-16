@@ -194,7 +194,7 @@ class Block {
   st(lane) {
     let s = this.lanes.get(lane);
     if (!s) {
-      s = { cur: null, last: null, thinking: null, hasText: false, start: 0, usage: null, err: false, foot: null, dur: 0 };
+      s = { lane, cur: null, last: null, thinking: null, hasText: false, start: 0, usage: null, err: false, foot: null, dur: 0 };
       this.lanes.set(lane, s);
     }
     return s;
@@ -208,7 +208,7 @@ class Block {
 
   newMsg(s) {
     const m = new Msg();
-    m.transform = this.view.msgTransform;
+    m.transform = this.view.transformFor(s.lane);
     m.el.classList.add('streaming');
     this.push(m.el);
     s.cur = m;
@@ -388,8 +388,7 @@ export class RunView {
     this.speakers = []; // group: [{ lane, el }] speaker headers, re-labelled when the catalog loads
     this.lastSpeaker = null;
     // group: show the agents' consensus marker as a short label instead of the raw token
-    this.msgTransform = this.mode === 'group' ? (t) => t.split('[UZLAŞI]').join('✓ *uzlaştı*')
-      : this.mode === 'lead' || this.mode === 'team' ? hideDecisionJson : null;
+    this.msgTransform = this.mode === 'group' ? (t) => t.split('[UZLAŞI]').join('✓ *uzlaştı*') : null;
     // lead / team: one folded card per agent and phase (like a chat app's "working" steps);
     // parallel / brainstorm keep side-by-side columns to compare answers.
     this.stack = this.mode === 'lead' || this.mode === 'team';
@@ -725,6 +724,13 @@ export class RunView {
     const show = st === 'running' && this.status === 'running';
     col.foot.hidden = !show;
     if (show) col.foot.replaceChildren(spinner('sm'), h('span', { text: col.block.statusText || 'Çalışıyor…' }));
+  }
+
+  /** Message transform for a lane: the lead / planner / reviewer's decision blocks are shown by the notes. */
+  transformFor(lane) {
+    const role = this.lanes.get(String(lane))?.role;
+    if ((this.mode === 'lead' || this.mode === 'team') && ['lead', 'planner', 'reviewer'].includes(role)) return hideDecisionJson;
+    return this.msgTransform;
   }
 
   /** The folded card's one-line preview: what the agent is doing now, or its summary. */

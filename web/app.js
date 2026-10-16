@@ -582,7 +582,7 @@ function updateComposerCtx() {
     if (targets.length) {
       if (state.target && !targets.some((t) => t.lane === state.target)) state.target = '';
       const sel = h('select', { class: 'ctx-select', 'aria-label': 'Mesajın hedefi', title: 'Takip mesajı kime gitsin?' },
-        h('option', { value: '' }, v.mode === 'brainstorm' ? 'Hepsi (yeni tur)' : v.mode === 'group' ? 'Sıradaki (otomatik)' : v.mode === 'lead' ? 'Yönetici' : 'Hepsi'),
+        h('option', { value: '' }, v.mode === 'brainstorm' ? 'Hepsi (yeni tur)' : v.mode === 'group' ? 'Sıradaki (otomatik)' : v.mode === 'lead' ? 'Yönetici' : v.mode === 'team' ? 'Takım' : 'Hepsi'),
         targets.map((t) => h('option', { value: t.lane, selected: t.lane === state.target }, t.label)));
       sel.addEventListener('change', () => { state.target = sel.value; });
       chips.push(h('label', { class: 'ctx-chip ctx-target' }, h('span', { class: 'hide-xs', text: 'Hedef:' }), sel));
