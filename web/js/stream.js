@@ -2,7 +2,7 @@
 // never applied twice (the consumer also drops seq <= last seen).
 import { enc } from './util.js';
 
-const KINDS = ['run', 'lane', 'phase', 'user', 'agent', 'diff', 'note', 'result'];
+const KINDS = ['run', 'lane', 'phase', 'user', 'dequeue', 'task', 'agent', 'diff', 'note', 'result', 'checkpoint', 'undo'];
 
 export class RunStream {
   /**

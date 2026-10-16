@@ -201,11 +201,15 @@ export class Orchestrator {
     this.store.setStatus(run, status, error);
   }
 
-  /** Start an activity on a run. `before()` emits its opening events right before 'running'. */
+  /**
+   * Start an activity on a run. `before()` emits its opening events right before 'running'.
+   * `listener` (ctx.listen) takes the messages the user sends meanwhile; the others wait in `queue`
+   * and are sent as follow-ups when the activity ends (stopped or not).
+   */
   #activate(run, fn, before) {
     const id = run.meta.id;
     const ctrl = new AbortController();
-    const entry = { ctrl, done: null };
+    const entry = { ctrl, done: null, listener: null, queue: [], ctx: null };
     this.active.set(id, entry);
     before?.();
     this.#setStatus(run, 'running');
@@ -213,7 +217,8 @@ export class Orchestrator {
       let status = 'done';
       let error;
       try {
-        const ctx = await makeContext(this.store, run, ctrl.signal);
+        const ctx = await makeContext(this.store, run, ctrl.signal, entry);
+        entry.ctx = ctx;
         status = (await fn(ctx)) || 'done';
         if (ctrl.signal.aborted) status = 'cancelled';
       } catch (err) {
@@ -224,11 +229,34 @@ export class Orchestrator {
           if (!(err instanceof HttpError)) console.error(`[run ${id}] hata: ${error}`);
         }
       }
+      entry.listener = null;
       if (this.active.get(id) === entry) this.active.delete(id);
       if (status === 'cancelled') this.store.append(run, { kind: 'note', text: 'Çalışma iptal edildi.', level: 'warn' });
       this.#setStatus(run, status, error);
+      if (entry.queue.length && !run.deleted && this.store.get(id)) this.#sendQueued(run, entry.queue);
     })();
     return entry;
+  }
+
+  /** Messages written while the run was busy: the first batch (same target) as one follow-up. */
+  #sendQueued(run, queue) {
+    const mod = MODES[run.meta.mode];
+    let n = 1;
+    while (n < queue.length && queue[n].lane === queue[0].lane) n++;
+    const lane = queue[0].lane;
+    const text = queue.slice(0, n).map((m) => m.text).join('\n\n');
+    const rest = queue.slice(n);
+    try {
+      mod.checkFollowUp?.(run.meta, { text, lane });
+    } catch (err) {
+      this.store.append(run, { kind: 'note', text: `Sıradaki mesaj gönderilemedi: ${err.message}`, level: 'error' });
+      if (rest.length) this.#sendQueued(run, rest);
+      return;
+    }
+    const next = this.#activate(run, (ctx) => mod.followUp(ctx, { text, lane }), () => {
+      this.store.append(run, { kind: 'dequeue', count: n }); // the UI moves them into the transcript
+    });
+    next.queue.push(...rest);
   }
 
   async createRun(raw) {
@@ -269,7 +297,6 @@ export class Orchestrator {
     const shown = typeof body?.text === 'string' ? body.text.trim() : '';
     if (!shown && !files.length && !rawImages.length) throw badRequest('Mesaj boş olamaz.');
     if (shown.length > PROMPT_MAX) throw badRequest('Mesaj çok uzun.');
-    if (this.active.has(id)) throw new HttpError(409, 'Çalışma hâlâ sürüyor; bitmesini bekleyin veya iptal edin.');
     const images = await att.saveImages(rawImages);
     const text = withAttachments(shown || (images.length ? 'Eklediğim resimlere bak.' : 'Eklediğim dosyalara bak.'), files, images);
     const lane = body?.lane == null || body.lane === '' ? undefined : String(body.lane);
@@ -283,10 +310,32 @@ export class Orchestrator {
       st.images = [...(st.images || []), ...images];
       this.store.saveMeta(run, true);
     }
-    this.#activate(run, (ctx) => mod.followUp(ctx, { text, lane }), () => {
-      this.store.append(run, { kind: 'user', text: shown, ...userFiles(files, images), ...(lane ? { lane } : {}) });
-    });
-    return { ok: true };
+    const userEvent = (extra) => this.store.append(run, { kind: 'user', text: shown, ...userFiles(files, images), ...(lane ? { lane } : {}), ...extra });
+    const entry = this.active.get(id);
+    if (entry) {
+      // While it runs: the activity takes it now (lead, team, group) or it is sent when it ends.
+      const msg = { text, lane };
+      const l = entry.listener;
+      if (l && (!l.accepts || l.accepts(msg))) {
+        userEvent({ live: true });
+        l.deliver(msg);
+        return { ok: true, delivery: 'live' };
+      }
+      userEvent({ queued: true });
+      entry.queue.push(msg);
+      return { ok: true, delivery: 'queued' };
+    }
+    this.#activate(run, (ctx) => mod.followUp(ctx, { text, lane }), () => userEvent({}));
+    return { ok: true, delivery: 'started' };
+  }
+
+  /** Stops one lane's running turn (a stuck agent); the run goes on without it. */
+  stopLane(id, body) {
+    const run = this.#get(id);
+    const lane = String(body?.lane || '');
+    if (!run.meta.lanes.some((l) => l.lane === lane)) throw badRequest(`Bilinmeyen şerit: ${lane}`);
+    const stopped = !!this.active.get(id)?.ctx?.stopLane(lane);
+    return { ok: true, stopped };
   }
 
   /** Restores the files of one checkpoint (changes Ortak made for a text-only agent). */

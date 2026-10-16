@@ -608,6 +608,8 @@ const LEAD_FORMAT =
   '"id": kısa ve benzersiz. "after" (isteğe bağlı): önce bitmesi gereken görevlerin id\'leri — bu ya da önceki cevaplarındaki görevler. ' +
   '"files" (isteğe bağlı): o ajana önceden gönderilecek ilgili dosyalar.\n' +
   '- Yukarıdaki örnekte t1 ile t2 hemen ve aynı anda başlar, t3 ikisi de bitince kendiliğinden başlar.\n' +
+  '- "cancel" (isteğe bağlı): artık gerekmeyen bekleyen ya da süren görevlerin id\'leri; süren görev durdurulur, bekleyen hiç başlamaz: ' +
+  '{"tasks":[…],"cancel":["t3"],"done":false}\n' +
   '- İş bittiğinde:\n```json\n{"tasks":[],"done":true,"summary":"Kullanıcıya yapılanların kısa özeti"}\n```';
 
 function parallelRules(parallel) {
@@ -660,11 +662,16 @@ function history(log) {
 }
 
 /** `reports` = [{ id, handle, task, ok, skipped?, secs?, text, applied?, failed? }] */
-export function leadReport({ round, maxRounds, reports, running, waiting, diff, warnings, goal, resumed, permission }) {
+export function leadReport({ round, maxRounds, reports, running, waiting, diff, warnings, goal, resumed, permission, messages = [] }) {
   const body = reportBlocks(reports);
   const busy = running.length || waiting.length;
   const final = round >= maxRounds;
-  return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\n`) + permissionLine(permission) +
+  const said = messages.length
+    ? `KULLANICININ YENİ MESAJI (ekip çalışırken yazdı; önceliklidir):\n${messages.join('\n\n')}\n\n` +
+      'Planı bu mesaja göre güncelle: gerekiyorsa yeni görev ver, artık gerekmeyen ya da mesajla çelişen görevleri "cancel" ile iptal et. ' +
+      'Kullanıcıya söyleyeceğin bir şey varsa JSON\'dan önce kısaca yaz (cevabın ona gösterilir).\n\n'
+    : '';
+  return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\n`) + permissionLine(permission) + said +
     `Denetim ${round}/${maxRounds}. Biten görevler:\n\n${body || '(yok)'}\n\n` +
     (running.length ? `Hâlâ süren görevler (bitince raporları gelecek; bunları yeniden verme):\n${taskLines(running)}\n\n` : '') +
     (waiting.length ? `Başlamayı bekleyen görevler:\n${taskLines(waiting)}\n\n` : '') +

@@ -453,6 +453,16 @@ function pauseNote(kind, err) {
 /** Runs the stages from wherever state says; pauses (state kept) on limits and network errors. */
 async function drive(ctx) {
   const st = upgrade(ctx.state);
+  // A message written while the plan is made or carried out becomes a note every later prompt
+  // carries (the review included). Later ones wait and run as a follow-up when the run ends.
+  ctx.listen?.({
+    accepts: (m) => !m.lane && (st.stage === 'plan' || st.stage === 'steps'),
+    deliver: (m) => {
+      st.notes.push(m.text);
+      ctx.note('Notun alındı: sonraki adımlar ve denetim bunu dikkate alacak.');
+      ctx.save();
+    },
+  });
   try {
     if (st.startTree === undefined) {
       st.startTree = await snapshot(ctx);
@@ -468,6 +478,7 @@ async function drive(ctx) {
       else await fixStage(ctx);
     }
   } catch (err) {
+    ctx.listen?.(null);
     const kind = err?.name === 'AbortError' ? 'abort' : errorKind(err);
     st.interrupted = { reason: kind === 'abort' ? 'kullanıcı iptal etti' : clip(err?.message || String(err), 1000), kind, at: Date.now() };
     ctx.save();
@@ -475,6 +486,7 @@ async function drive(ctx) {
     if (kind !== 'abort') ctx.note('Kaldığı yer kaydedildi; "devam et" yazarak sürdürebilirsin.', 'info');
     throw err;
   }
+  ctx.listen?.(null);
   st.interrupted = null;
   st.review = st.reviews.at(-1)?.text || null; // older clients read these two
   ctx.save();

@@ -46,6 +46,7 @@ export function fakeCtx({ cwd, lanes, agents, config = {}, script, git = true, s
   const calls = [];
   const counts = new Map();
   const ctrl = new AbortController();
+  const stops = new Map(); // lane -> stops its running turn (ctx.stopLane)
   let sid = 0;
   const ctx = {
     meta,
@@ -63,6 +64,14 @@ export function fakeCtx({ cwd, lanes, agents, config = {}, script, git = true, s
     lanes: (role) => meta.lanes.filter((l) => !role || l.role === role),
     adapterOf: (laneId) => agents[ctx.lane(laneId)?.agentId] || null,
     async ensureAdapters() {},
+    listener: null,
+    listen(l) { ctx.listener = l || null; },
+    stopLane(laneId) {
+      const f = stops.get(laneId);
+      if (!f) return false;
+      f();
+      return true;
+    },
     addLane(spec) {
       let lane = spec.agentId;
       for (let n = 2; meta.lanes.some((l) => l.lane === lane); n++) lane = `${spec.agentId}#${n}`;
@@ -86,11 +95,19 @@ export function fakeCtx({ cwd, lanes, agents, config = {}, script, git = true, s
       const resumed = !!(opts.resume !== false && lane.sessionId);
       calls.push({ lane: laneId, n, resumed, prompt: opts.prompt, permission: opts.permission, system: opts.system });
       let text;
+      const stopped = new Promise((_, reject) => stops.set(laneId, () => {
+        const e = new Error('Durduruldu');
+        e.code = 'stopped';
+        e.sawOutput = true;
+        reject(e);
+      }));
       try {
-        text = await script(laneId, { ...opts, resumed }, { n, cwd, lane });
+        text = await Promise.race([script(laneId, { ...opts, resumed }, { n, cwd, lane }), stopped]);
       } catch (err) {
         if (err.sawOutput === undefined) err.sawOutput = false;
         throw err;
+      } finally {
+        stops.delete(laneId);
       }
       if (!resumed) lane.sessionId = `s${++sid}`;
       return { text: String(text ?? ''), sessionId: lane.sessionId };

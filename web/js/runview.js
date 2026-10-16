@@ -121,9 +121,18 @@ function noteEl(text, level) {
     body);
 }
 
-function userEl(text, target, files, images) {
+// A message written while the run was busy: taken at once (lead, team, group) or queued.
+const USER_FLAG = {
+  live: ['zap', 'Çalışma sürerken iletildi'],
+  queued: ['clock', 'Sırada — bu tur bitince gönderilir'],
+};
+
+function userEl(text, target, files, images, flag) {
+  const f = USER_FLAG[flag];
   const bubble = h('div', { class: 'user-bubble' },
-    target && h('div', { class: 'user-target', text: `→ ${target}` }),
+    (target || f) && h('div', { class: 'user-meta' },
+      target && h('span', { class: 'user-target', text: `→ ${target}` }),
+      f && h('span', { class: `user-flag flag-${flag}` }, icon(f[0]), f[1])),
     images?.length > 0 && h('div', { class: 'user-images' },
       images.map((im) => h('a', { href: im.url, target: '_blank', rel: 'noopener', title: im.name }, h('img', { src: im.url, alt: im.name })))),
     files?.length > 0 && h('div', { class: 'user-files' },
@@ -421,7 +430,10 @@ export class RunView {
 
     if (this.single) this.buildChat();
     else this.buildMulti();
-    this.el.append(this.jumpBtn);
+    // messages waiting for the current turn to end (moved into the transcript on 'dequeue')
+    this.queued = [];
+    this.queueBox = h('div', { class: 'queue-box' });
+    this.el.append(this.queueBox, this.jumpBtn);
 
     scroller.replaceChildren(this.el);
     this.lastTop = scroller.scrollTop;
@@ -768,6 +780,7 @@ export class RunView {
       case 'lane': this.declareLane(ev); break;
       case 'phase': this.onPhase(ev); break;
       case 'user': this.onUser(ev); break;
+      case 'dequeue': this.onDequeue(ev); break;
       case 'agent': this.onAgent(ev); break;
       case 'diff': this.onDiff(ev); break;
       case 'checkpoint': this.onCheckpoint(ev); break;
@@ -797,6 +810,13 @@ export class RunView {
   }
 
   onUser(ev) {
+    if (ev.queued) {
+      const el = this.userBubble(ev, 'queued');
+      this.queued.push({ ev, el });
+      this.queueBox.append(el);
+      if (this.stick) this.scrollBottom();
+      return;
+    }
     const text = String(ev.text ?? '');
     const first = !this.promptSeen;
     this.promptSeen = true;
@@ -804,11 +824,25 @@ export class RunView {
     if (first && (this.prompt || this.promptFiles.length || this.promptImages.length) && text.trim() === this.prompt.trim()) return; // already shown from config
     for (const b of this.allBlocks()) b.boundary();
     for (const info of this.lanes.values()) info.err = false;
-    const target = ev.lane != null ? this.laneLabel(this.lanes.get(String(ev.lane)) || { lane: String(ev.lane) }) : null;
     this.stick = true;
     this.lastSpeaker = null;
-    this.place(userEl(text, target, files, Array.isArray(ev.images) ? ev.images : []));
+    this.place(this.userBubble(ev, ev.live ? 'live' : null));
     if (!this.single && this.sections.some((sec) => sec.grid)) this.needSection = true;
+  }
+
+  userBubble(ev, flag) {
+    const target = ev.lane != null ? this.laneLabel(this.lanes.get(String(ev.lane)) || { lane: String(ev.lane) }) : null;
+    const files = Array.isArray(ev.files) ? ev.files : [];
+    return userEl(String(ev.text ?? ''), target, files, Array.isArray(ev.images) ? ev.images : [], flag);
+  }
+
+  /** The first `count` queued messages are being sent now: they join the transcript. */
+  onDequeue(ev) {
+    const n = Math.max(1, Number(ev.count) || 1);
+    for (const { ev: u, el } of this.queued.splice(0, n)) {
+      el.remove();
+      this.onUser({ ...u, queued: false });
+    }
   }
 
   onAgent(ev) {

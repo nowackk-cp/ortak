@@ -20,8 +20,21 @@ function waitFor(ms, signal) {
   });
 }
 
-export async function makeContext(store, run, signal) {
+/** The error a turn ends with when only that lane was stopped (ctx.stopLane), not the whole run. */
+export function stoppedError() {
+  const e = new Error('Durduruldu: bu ajanın turu elle durduruldu.');
+  e.code = 'stopped';
+  e.sawOutput = true; // never retried in a fresh session
+  return e;
+}
+
+/**
+ * `live` (optional) = the activity's mailbox in index.js: messages the user sends while it runs go
+ * to `live.listener` ({ accepts?(msg), deliver(msg) }, set with ctx.listen) or wait for the end.
+ */
+export async function makeContext(store, run, signal, live = null) {
   const meta = run.meta;
+  const laneStops = new Map(); // lane -> AbortController of its running turn
   const adapters = new Map();
   for (const l of meta.lanes) {
     if (!adapters.has(l.agentId)) adapters.set(l.agentId, await findAdapter(l.agentId));
@@ -66,6 +79,20 @@ export async function makeContext(store, run, signal) {
       store.saveMeta(run, true);
       return l;
     },
+    /**
+     * Messages the user writes while this activity runs: `listener` = { accepts?(msg), deliver(msg) }
+     * with msg = { text, lane }; null = not listening (messages wait until the activity ends).
+     */
+    listen(listener) {
+      if (live) live.listener = listener || null;
+    },
+    /** Stops the running turn of one lane only; it fails with stoppedError(). False if idle. */
+    stopLane(laneId) {
+      const c = laneStops.get(laneId);
+      if (!c || c.signal.aborted) return false;
+      c.abort();
+      return true;
+    },
     canResume(laneId) {
       const l = ctx.lane(laneId);
       return !!(l?.sessionId && adapters.get(l.agentId)?.capabilities?.resume);
@@ -101,11 +128,17 @@ export async function makeContext(store, run, signal) {
 
       run.busy.add(laneId);
       let release = null;
+      // this turn's own signal: the run's, plus ctx.stopLane for this lane alone
+      const own = new AbortController();
+      const onRunAbort = () => own.abort();
+      signal.addEventListener('abort', onRunAbort, { once: true });
+      laneStops.set(laneId, own);
+      const tsignal = own.signal;
       try {
         // Heavy local CLIs (Claude Code, Codex) share a machine-wide limit (setting maxConcurrent).
         if (adapter.capabilities?.localProcess) {
           release = await acquireSlot({
-            signal,
+            signal: tsignal,
             onWait: () => store.append(run, { kind: 'agent', lane: laneId, event: {
               type: 'status',
               text: `Sırada: aynı anda en fazla ${getSettings().maxConcurrent} ajan çalışıyor (Performans ayarı)`,
@@ -126,7 +159,7 @@ export async function makeContext(store, run, signal) {
           system,
           // Real function calling for API agents (textcoder.js runs the tools).
           ...(tools ? { tools } : {}),
-          signal,
+          signal: tsignal,
           onEvent: (ev) => {
             if (!ev || typeof ev !== 'object' || typeof ev.type !== 'string') return;
             if (ev.type === 'error') sawError = true;
@@ -134,7 +167,7 @@ export async function makeContext(store, run, signal) {
             if (OUTPUT_EVENTS.has(ev.type)) sawOutput = true;
             store.append(run, { kind: 'agent', lane: laneId, event: ev });
           },
-        })), signal);
+        })), tsignal);
         let res;
         for (let n = 0; ; n++) {
           try {
@@ -143,7 +176,7 @@ export async function makeContext(store, run, signal) {
           } catch (err) {
             // Transient failures (overload, network, a token refresh race between Claude Code
             // processes…) that happened before any output are retried after a pause.
-            if (err?.name === 'AbortError' || signal.aborted || sawOutput || err?.code === 'tools_unsupported' || n >= RETRY_DELAYS.length || errorKind(err) !== 'transient') throw err;
+            if (err?.name === 'AbortError' || tsignal.aborted || sawOutput || err?.code === 'tools_unsupported' || n >= RETRY_DELAYS.length || errorKind(err) !== 'transient') throw err;
             const secs = RETRY_DELAYS[n] / 1000;
             store.append(run, { kind: 'agent', lane: laneId, event: {
               type: 'status', retry: true,
@@ -151,8 +184,8 @@ export async function makeContext(store, run, signal) {
             } });
             release?.();
             release = null;
-            await waitFor(RETRY_DELAYS[n], signal);
-            if (adapter.capabilities?.localProcess) release = await acquireSlot({ signal });
+            await waitFor(RETRY_DELAYS[n], tsignal);
+            if (adapter.capabilities?.localProcess) release = await acquireSlot({ signal: tsignal });
             sawError = false;
             sawDone = false;
           }
@@ -173,7 +206,12 @@ export async function makeContext(store, run, signal) {
         lane.lastText = clip(text, 4000);
         return { text, sessionId: lane.sessionId };
       } catch (err) {
-        if (err?.name === 'AbortError' || signal.aborted) throw new AbortError();
+        if (signal.aborted) throw new AbortError();
+        if (tsignal.aborted) {
+          store.append(run, { kind: 'agent', lane: laneId, event: { type: 'error', message: 'Durduruldu.' } });
+          throw stoppedError();
+        }
+        if (err?.name === 'AbortError') throw new AbortError();
         const message = err?.message || String(err);
         // A model that rejects tools is not an error for the user: textcoder.js falls back to the text protocol.
         if (!sawError && err?.code !== 'tools_unsupported') store.append(run, { kind: 'agent', lane: laneId, event: { type: 'error', message } });
@@ -183,6 +221,8 @@ export async function makeContext(store, run, signal) {
       } finally {
         release?.();
         run.busy.delete(laneId);
+        signal.removeEventListener('abort', onRunAbort);
+        if (laneStops.get(laneId) === own) laneStops.delete(laneId);
       }
     },
   };

@@ -89,42 +89,64 @@ async function converse(ctx, firstSpeaker) {
   const waited = new Map(st.active.map((l) => [l, 0]));
   let next = firstSpeaker && st.active.includes(firstSpeaker) ? firstSpeaker : st.active[0];
 
-  while (budget-- > 0 && next) {
-    ctx.throwIfAborted();
-    const speaker = next;
-    const p = byLane.get(speaker);
-    const seen = st.seen?.[speaker];
-    const prompt = seen != null && ctx.canResume(speaker)
-      ? P.groupResume(st.log.slice(seen), name, p.handle)
-      : P.groupFresh(st.log, name, p.handle);
-    const system = P.groupSystem(ps.map((x) => ({ handle: x.handle, title: x.title, self: x.lane === speaker })));
-
-    let text;
-    try {
-      text = (await ctx.turn(speaker, { prompt, permission: PERM, system })).text;
-    } catch (err) {
-      if (err.name === 'AbortError') throw err;
-      ctx.note(`${p.title} cevap veremedi: ${err.message}. Konuşma onsuz devam ediyor.`, 'warn');
-      st.active = st.active.filter((l) => l !== speaker);
-      if (!st.active.length) throw new Error('Hiçbir katılımcı cevap veremedi.');
-      next = nextInRotation(order, st.active, speaker);
-      continue;
+  // The user can speak while the agents talk: the message joins the conversation after the current
+  // turn; the one they @-mention (or picked as target) speaks next and everyone gets another round.
+  const heard = [];
+  const absorb = () => {
+    if (!heard.length) return;
+    for (const m of heard.splice(0)) {
+      st.log.push({ who: 'user', text: m.text });
+      const to = m.lane || mentionedLane(ctx, m.text);
+      if (to) next = to;
     }
-
-    st.log.push({ who: speaker, text });
-    (st.seen ||= {})[speaker] = st.log.length;
-    spokeThisSession.add(speaker);
+    st.active = [...order];
+    if (!st.active.includes(next)) next = st.active[0];
+    agreed.clear();
+    budget = Math.max(budget, st.active.length);
     ctx.save();
+  };
+  ctx.listen?.({ deliver: (m) => heard.push(m) });
+  try {
+    for (;;) {
+      absorb();
+      if (!(budget-- > 0 && next)) break;
+      ctx.throwIfAborted();
+      const speaker = next;
+      const p = byLane.get(speaker);
+      const seen = st.seen?.[speaker];
+      const prompt = seen != null && ctx.canResume(speaker)
+        ? P.groupResume(st.log.slice(seen), name, p.handle)
+        : P.groupFresh(st.log, name, p.handle);
+      const system = P.groupSystem(ps.map((x) => ({ handle: x.handle, title: x.title, self: x.lane === speaker })));
 
-    if (text.includes(P.CONSENSUS)) agreed.add(speaker);
-    else agreed.clear();
-    if (st.active.every((l) => agreed.has(l))) {
-      ctx.note('Herkes uzlaştı; konuşma durdu. Yazarak devam ettirebilir ya da birine @ad ile soru sorabilirsiniz.');
-      return;
+      let text;
+      try {
+        text = (await ctx.turn(speaker, { prompt, permission: PERM, system })).text;
+      } catch (err) {
+        if (err.name === 'AbortError') throw err;
+        ctx.note(`${p.title} cevap veremedi: ${err.message}. Konuşma onsuz devam ediyor.`, 'warn');
+        st.active = st.active.filter((l) => l !== speaker);
+        if (!st.active.length) throw new Error('Hiçbir katılımcı cevap veremedi.');
+        next = nextInRotation(order, st.active, speaker);
+        continue;
+      }
+
+      st.log.push({ who: speaker, text });
+      (st.seen ||= {})[speaker] = st.log.length;
+      spokeThisSession.add(speaker);
+      ctx.save();
+
+      if (text.includes(P.CONSENSUS)) agreed.add(speaker);
+      else agreed.clear();
+      for (const l of st.active) waited.set(l, l === speaker ? 0 : (waited.get(l) || 0) + 1);
+      next = pickNext(ctx, { text, speaker, order, active: st.active, waited, spoke: spokeThisSession, budget });
+      if (st.active.every((l) => agreed.has(l)) && !heard.length) {
+        ctx.note('Herkes uzlaştı; konuşma durdu. Yazarak devam ettirebilir ya da birine @ad ile soru sorabilirsiniz.');
+        return;
+      }
     }
-
-    for (const l of st.active) waited.set(l, l === speaker ? 0 : (waited.get(l) || 0) + 1);
-    next = pickNext(ctx, { text, speaker, order, active: st.active, waited, spoke: spokeThisSession, budget });
+  } finally {
+    ctx.listen?.(null); // from here on a message starts the next conversation (follow-up)
   }
   ctx.note('Konuşma bu tur için sınıra ulaştı. Devam etmeleri için bir mesaj yazın (ör. "devam edin" ya da "@codex sen ne diyorsun?").');
 }

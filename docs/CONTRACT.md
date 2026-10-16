@@ -230,8 +230,9 @@ All JSON. Errors → `{ error: "Türkçe mesaj" }` with 4xx/5xx.
 | `POST /api/runs`                 | RunConfig | `{ runId }` |
 | `GET  /api/runs/:id`             | | `{ meta, events }` |
 | `GET  /api/runs/:id/events`      | `?since=<seq>` | SSE stream: replays events with seq > since, then live; `: ping` every 15s |
-| `POST /api/runs/:id/message`     | `{ text, lane? }` | `{ ok }` follow-up turn (chat: the agent; brainstorm: another round with user input) |
+| `POST /api/runs/:id/message`     | `{ text, lane? }` | `{ ok, delivery: 'started' \| 'live' \| 'queued' }` follow-up turn (chat: the agent; brainstorm: another round with user input). While the run works: `live` = the activity took it (lead: its next turn; team: a note during plan/steps; group: joins after the current turn; event `user` with `live: true`), `queued` = sent as a follow-up when the activity ends, also after a cancel (event `user` with `queued: true`, later `{ kind: 'dequeue', count }`) |
 | `POST /api/runs/:id/cancel`      | | `{ ok }` |
+| `POST /api/runs/:id/stop-lane`   | `{ lane }` | `{ ok, stopped }` stops that lane's running turn only (a stuck agent); the turn fails with code `stopped`, the run goes on (lead: the task's report says it was stopped) |
 | `POST /api/runs/:id/apply`       | `{ lane }` | `{ ok, output }` apply that lane's diff to the real `cwd` (parallel mode) |
 | `DELETE /api/runs/:id`           | | `{ ok }` (also removes worktrees) |
 | `GET  /api/fs/check`             | `?path=` | `{ exists, isDir, isGit, branch? }` |

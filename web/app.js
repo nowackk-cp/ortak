@@ -520,8 +520,13 @@ function updateTitle() {
 
 // ---- composer --------------------------------------------------------------------------------
 
-// The backend accepts follow-ups in every status except 'running' (409).
-const canFollowUp = (v) => !!v && v.status !== 'running';
+// While a run works, a message goes to it at once (lead, team, group) or waits for the turn to end.
+const LIVE_PLACEHOLDER = {
+  lead: 'Yöneticiye yaz — ekip çalışırken hemen iletilir…',
+  team: 'Takıma not yaz — sonraki adımlar ve denetim dikkate alır…',
+  group: 'Araya gir — mesajın bu konuşmadan hemen sonra sohbete katılır…',
+};
+const QUEUED_PLACEHOLDER = 'Mesaj yaz — bu tur bitince gönderilir (Esc: durdur)…';
 
 const FOLLOW_UP_PLACEHOLDER = {
   chat: 'Yanıt yazın…',
@@ -551,7 +556,11 @@ function updateComposer() {
   } else if (state.view === 'run') {
     const v = state.runView;
     if (!v) { placeholder = 'Yükleniyor…'; disabled = true; }
-    else if (v.status === 'running') { stop = true; placeholder = 'Ajan çalışıyor… Durdurmak için Esc.'; }
+    else if (v.status === 'running') {
+      // empty composer: the button stops the run; with text it sends
+      stop = !ta.value.trim() && !attached().length;
+      placeholder = LIVE_PLACEHOLDER[v.mode] || QUEUED_PLACEHOLDER;
+    }
     else placeholder = FOLLOW_UP_PLACEHOLDER[v.mode] || FOLLOW_UP_PLACEHOLDER.chat;
   }
   ta.placeholder = placeholder;
@@ -652,12 +661,12 @@ async function submit() {
   if (state.view === 'run') {
     const v = state.runView;
     if (!v) return;
-    if (v.status === 'running') { toast('Ajan hâlâ çalışıyor. Bitmesini bekleyin ya da Esc ile durdurun.', 'info'); return; }
     if (!text && !files.length) { ta.focus(); return; }
     const lane = state.target && v.followUpTargets().some((t) => t.lane === state.target) ? state.target : undefined;
     setBusy(true);
     try {
-      await api(`/api/runs/${enc(v.id)}/message`, { method: 'POST', body: { text, ...(lane ? { lane } : {}), ...(files.length ? { attachments: files } : {}) } });
+      const r = await api(`/api/runs/${enc(v.id)}/message`, { method: 'POST', body: { text, ...(lane ? { lane } : {}), ...(files.length ? { attachments: files } : {}) } });
+      if (r?.delivery === 'queued') toast('Mesaj sıraya alındı: bu tur bitince gönderilecek. Hemen gitmesi için Durdur’a bas.', 'info', 4000);
       clearPrompt();
       clearAttachments();
       v.stick = true;
@@ -728,7 +737,11 @@ function bind() {
   $('ap-refresh').addEventListener('click', refreshAll);
 
   const ta = $('prompt');
-  ta.addEventListener('input', () => { autosize(); saveDraft(); });
+  ta.addEventListener('input', () => {
+    autosize();
+    saveDraft();
+    if (state.runView?.status === 'running') updateComposer(); // send ↔ stop
+  });
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();

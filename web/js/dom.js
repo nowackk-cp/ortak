@@ -85,6 +85,7 @@ const ICONS = {
   sidebar: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/>',
   zap: '<path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/>',
   moonzz: '<path d="M18.5 14.5A7 7 0 0 1 9.5 5.5a7 7 0 1 0 9 9z"/><path d="M15 4h4l-4 4h4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
 };
 
 export function icon(name, cls = '') {

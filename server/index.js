@@ -256,7 +256,7 @@ async function api(req, res, url) {
     return sendError(res, 405, 'İzin verilmeyen yöntem.');
   }
 
-  const m = pathname.match(/^\/api\/runs\/([^/]+)(?:\/(events|message|cancel|apply|undo))?\/?$/);
+  const m = pathname.match(/^\/api\/runs\/([^/]+)(?:\/(events|message|cancel|stop-lane|apply|undo))?\/?$/);
   if (m) {
     const id = decodeURIComponent(m[1]);
     const action = m[2];
@@ -271,6 +271,7 @@ async function api(req, res, url) {
       const body = await readJson(req);
       if (action === 'message') return sendJson(res, 200, await orch.message(id, body));
       if (action === 'cancel') return sendJson(res, 200, orch.cancel(id));
+      if (action === 'stop-lane') return sendJson(res, 200, orch.stopLane(id, body));
       if (action === 'apply') return sendJson(res, 200, await orch.apply(id, body));
       if (action === 'undo') return sendJson(res, 200, await orch.undo(id, body));
     }

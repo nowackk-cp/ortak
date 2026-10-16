@@ -916,7 +916,10 @@ button.ctx-chip:hover { color: var(--text); }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.user-target { margin-bottom: 2px; font-size: 11.5px; color: var(--text-muted); }
+.user-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 2px; font-size: 11.5px; color: var(--text-muted); }
+.user-flag { display: inline-flex; align-items: center; gap: 4px; }
+.user-flag .ic { width: 12px; height: 12px; }
+.user-flag.flag-live { color: var(--accent); }
 
 .msg { margin: 6px 0 8px; min-width: 0; }
 .msg.streaming .md > :last-child::after,
@@ -1579,3 +1582,9 @@ body[data-surface="chat"] .sb-project { display: none; }
   .menu { left: auto; right: 0; transform: none; width: min(300px, 86vw); }
   .budget { align-items: flex-start; flex-direction: column; }
 }
+
+/* messages written while the run works, waiting for the current turn to end */
+.queue-box { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; }
+.queue-box:empty { display: none; }
+.queue-box .user-row { margin: 0; }
+.queue-box .user-bubble { opacity: 0.72; outline: 1px dashed var(--border); outline-offset: -1px; }

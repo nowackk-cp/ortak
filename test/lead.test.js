@@ -128,3 +128,35 @@ test('yönetici katalogdan model seçer: meşgul modelin yeni kopyası açılır
   assert.equal(tasks.filter((e) => e.state === 'running').length, 5);
   assert.equal(tasks.filter((e) => e.state === 'done').length, 5);
 });
+
+test('çalışma sürerken yazılan mesaj yöneticiye hemen gider; yönetici süren ve bekleyen görevi iptal eder', async () => {
+  const cwd = await makeRepo();
+  const plan = '```json\n{"tasks":[{"id":"t1","agent":"qwen","task":"uzun iş"},{"id":"t2","agent":"argon","task":"sonraki iş","after":["t1"]}],"done":false}\n```';
+  const ctx = fakeCtx({
+    cwd, lanes: LANES, agents: AGENTS, config: { mode: 'lead', budget: 'free-first', steps: 4 },
+    script: async (lane, opts, call) => {
+      if (lane === 'lead') {
+        if (call.n === 1) return plan;
+        if (call.n === 2) return 'Tamam, vazgeçiyoruz.\n```json\n{"tasks":[],"cancel":["t1","t2"],"done":false}\n```';
+        return DONE;
+      }
+      if (lane === 'groq') {
+        setTimeout(() => ctx.listener.deliver({ text: 'Vazgeçtim, bu işler yapılmasın.' }), 10);
+        await new Promise((r) => setTimeout(r, 400));
+        return 'ÖZET: bitti';
+      }
+      return 'ÖZET: tamam';
+    },
+  });
+  ctx.catalogSource = async () => [];
+  await lead.start(ctx);
+  const second = callsOf(ctx, 'lead')[1].prompt;
+  assert.match(second, /KULLANICININ YENİ MESAJI \(ekip çalışırken yazdı; önceliklidir\):\nVazgeçtim, bu işler yapılmasın\./);
+  assert.match(second, /Hâlâ süren görevler[\s\S]*t1 · @qwen/);
+  assert.equal(callsOf(ctx, 'gemini').length, 0, 'bekleyen görev hiç başlamadı');
+  assert.ok(notes(ctx).some((t) => /Yönetici t1, t2 görevlerini iptal etti/.test(t)), notes(ctx).join('\n'));
+  assert.deepEqual(ctx.state.log.map((r) => [r.id, r.ok, r.skipped]), [['t2', false, true], ['t1', false, true]]);
+  assert.ok(ctx.events.some((e) => e.kind === 'task' && e.id === 't1' && e.state === 'cancelled'));
+  assert.equal(ctx.listener, null, 'dinleme bitti');
+  assert.ok(ctx.events.some((e) => e.kind === 'phase' && /^Yeni mesaj/.test(e.title)));
+});

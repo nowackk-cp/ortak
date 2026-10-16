@@ -167,7 +167,9 @@ function normalizeDecision(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
   const arr = obj.tasks ?? obj.gorevler ?? obj['görevler'] ?? obj.assignments;
   const done = obj.done === true || obj.bitti === true || /^(true|evet)$/i.test(String(obj.done ?? ''));
-  if (!Array.isArray(arr) && !done) return null;
+  const stop = obj.cancel ?? obj.iptal;
+  const cancel = (Array.isArray(stop) ? stop : stop != null ? [stop] : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 40);
+  if (!Array.isArray(arr) && !done && !Array.isArray(stop)) return null;
   const tasks = (Array.isArray(arr) ? arr : []).map((t) => {
     if (!t || typeof t !== 'object') return null;
     const task = firstStr(t.task, t.gorev, t['görev'], t.instructions, t.description, t.details);
@@ -180,7 +182,7 @@ function normalizeDecision(obj) {
     const id = String(t.id ?? '').trim().replace(/\s+/g, '-').slice(0, 24);
     return { id, agent: firstStr(t.agent, t.ajan, t.to, t.worker, t.assignee), task: task.slice(0, 20_000), files, after };
   }).filter(Boolean);
-  return { tasks, done: done && !tasks.length, summary: firstStr(obj.summary, obj.ozet, obj['özet']) };
+  return { tasks, cancel, done: done && !tasks.length, summary: firstStr(obj.summary, obj.ozet, obj['özet']) };
 }
 
 export function parseDecision(text) {
@@ -293,6 +295,7 @@ async function runTask(ctx, w, t) {
     return { ...base, ok: true, text: r.text };
   } catch (err) {
     if (err.name === 'AbortError') throw err;
+    if (err.code === 'stopped') return { ...base, ok: false, kind: 'stopped', text: 'Görev durduruldu (ajanın turu elle durduruldu).' };
     return { ...base, ok: false, kind: errorKind(err), text: `Hata: ${err.message}` };
   }
 }
@@ -358,6 +361,26 @@ function composeResult(ctx, d, totals, leadTurns) {
   return lines.join('\n');
 }
 
+/**
+ * Messages the user writes while the team works (index.js → ctx.listen): the lead gets them in its
+ * next turn — at once when it is idle, else right after its current turn. Opened as the activity
+ * starts, so nothing written during the quota check or the first plan is lost.
+ */
+function openMailbox(ctx) {
+  if (ctx.leadMail) return ctx.leadMail;
+  const mail = { inbox: [], wake: null };
+  mail.next = () => new Promise((resolve) => {
+    if (mail.inbox.length) resolve({ kind: 'msg' });
+    else mail.wake = () => { mail.wake = null; resolve({ kind: 'msg' }); };
+  });
+  ctx.listen?.({
+    accepts: (m) => !m.lane || m.lane === 'lead',
+    deliver: (m) => { mail.inbox.push(m.text); mail.wake?.(); },
+  });
+  ctx.leadMail = mail;
+  return mail;
+}
+
 /** "Yönetici 46 model görüyor: OpenRouter 31 · EVREN 9 · Groq 4 · …" */
 function catalogNote(catalog, parallel) {
   const n = catalog.reduce((a, p) => a + p.models.length, 0);
@@ -371,7 +394,7 @@ function catalogNote(catalog, parallel) {
  */
 async function drive(ctx, makePrompt, phaseTitle) {
   const st = ctx.state;
-  const maxRounds = ctx.config.steps;
+  let maxRounds = ctx.config.steps;
   st.log ||= [];
   st.logFrom = st.log.length;
   st.taskSeq ||= 0;
@@ -397,6 +420,9 @@ async function drive(ctx, makePrompt, phaseTitle) {
   let leadP = null;          // a lead review in flight (runs while tasks keep going)
   let decision = null;
   let fatal = null;
+  const mail = openMailbox(ctx);
+  const inbox = mail.inbox;
+  let msgP = null;
 
   // Saved after every change, so a usage limit, an error, a cancel or a restart loses nothing.
   const persist = () => {
@@ -499,6 +525,13 @@ async function drive(ctx, makePrompt, phaseTitle) {
   const taskEvent = (x, state) => ctx.emit({ kind: 'task', id: x.id, lane: x.w?.lane, state, title: line(x.task, 160) });
 
   const finishTask = (x, r) => {
+    if (x.cancelled) { // the lead cancelled it: it knows, no report needed
+      x.status = 'skipped';
+      st.log.push({ id: x.id, n: x.n, handle: x.w?.handle || keyOf(x.target), tier: tierOf(x.target), task: clip(x.task, 2000), ok: false, skipped: true, secs: null });
+      if (x.w) taskEvent(x, 'cancelled');
+      persist();
+      return;
+    }
     x.status = r.ok ? 'done' : r.skipped ? 'skipped' : 'failed';
     const secs = x.startedAt ? Math.round((Date.now() - x.startedAt) / 1000) : null;
     const who = x.w || { handle: keyOf(x.target), title: labelOf(x.target), tier: tierOf(x.target) };
@@ -510,8 +543,23 @@ async function drive(ctx, makePrompt, phaseTitle) {
     persist();
   };
 
+  /** The lead's "cancel": waiting tasks are dropped, running ones stopped (their lane's turn). */
+  const cancelTasks = (ids) => {
+    const done = [];
+    for (const id of ids) {
+      const x = tasks.get(id);
+      if (!x || (x.status !== 'waiting' && x.status !== 'running') || x.cancelled) continue;
+      x.cancelled = true;
+      done.push(id);
+      if (x.status === 'waiting') finishTask(x, { ok: false, skipped: true });
+      else ctx.stopLane?.(x.w.lane);
+    }
+    if (done.length) ctx.note(`Yönetici ${done.join(', ')} görev${done.length > 1 ? 'lerini' : 'ini'} iptal etti.`, 'warn');
+  };
+
   const accept = (d) => {
     decision = d;
+    if (d.cancel?.length) cancelTasks(d.cancel);
     if (!d.tasks.length) return;
     if (rounds >= maxRounds) {
       ctx.note(`Denetim sınırına (${maxRounds}) ulaşıldı; yöneticinin yeni görevleri çalıştırılmadı.`, 'warn');
@@ -580,7 +628,7 @@ async function drive(ctx, makePrompt, phaseTitle) {
         const deps = x.after.map((id) => tasks.get(id));
         const bad = deps.find((dep) => dep.status === 'failed' || dep.status === 'skipped');
         if (bad) {
-          finishTask(x, { ok: false, skipped: true, text: `Çalıştırılmadı: bağlı olduğu ${bad.id} başarısız oldu.` });
+          finishTask(x, { ok: false, skipped: true, text: `Çalıştırılmadı: bağlı olduğu ${bad.id} ${bad.cancelled ? 'iptal edildi' : 'başarısız oldu'}.` });
           changed = true;
         } else if (deps.every((dep) => dep.status === 'done') && running.size < parallel) {
           const w = laneFor(x.target, x.prefer);
@@ -597,7 +645,7 @@ async function drive(ctx, makePrompt, phaseTitle) {
     }
   };
 
-  const review = () => {
+  const review = (messages = []) => {
     rounds++;
     const reports = pending;
     const warns = warnings;
@@ -606,7 +654,7 @@ async function drive(ctx, makePrompt, phaseTitle) {
     warnings = [];
     const runningNow = [...tasks.values()].filter((x) => x.status === 'running').map(view);
     const waitingNow = [...tasks.values()].filter((x) => x.status === 'waiting').map(view);
-    ctx.phase('denetim', `Denetim ${rounds}${runningNow.length ? ` · ${runningNow.length} görev sürüyor` : ''}`);
+    ctx.phase('denetim', `${messages.length ? 'Yeni mesaj' : `Denetim ${rounds}`}${runningNow.length ? ` · ${runningNow.length} görev sürüyor` : ''}`);
     return (async () => {
       const d = await diffSince(ctx, reviewTree);
       if (d) reviewTree = d.to;
@@ -616,7 +664,7 @@ async function drive(ctx, makePrompt, phaseTitle) {
           round: rounds, maxRounds, reports, running: runningNow, waiting: waitingNow,
           // per-file view sized for the lead's model (binary/lockfiles summarized, cut files named)
           diff: d ? reviewDiff(d.diff, Math.floor(promptBudget(ctx.adapterOf('lead')) * 0.6)) : null,
-          warnings: warns, goal: st.goal, resumed: ctx.canResume('lead'), permission: ctx.config.permission,
+          warnings: warns, goal: st.goal, resumed: ctx.canResume('lead'), permission: ctx.config.permission, messages,
         })),
       };
     })().catch((error) => ({ kind: 'lead', error }));
@@ -632,12 +680,21 @@ async function drive(ctx, makePrompt, phaseTitle) {
     for (;;) {
       if (!fatal) startReady();
       if (!leadP && !fatal) {
-        // keep the last review for when everything has stopped
-        const urgent = pending.some(needsLead) && rounds < maxRounds - 1;
-        if (pending.length && rounds < maxRounds && (!running.size || urgent)) leadP = review();
+        if (inbox.length) {
+          // the user's message gets a turn of its own (and the lead one more round after it)
+          maxRounds = Math.max(maxRounds, rounds + 2);
+          leadP = review(inbox.splice(0));
+        } else {
+          // keep the last review for when everything has stopped
+          const urgent = pending.some(needsLead) && rounds < maxRounds - 1;
+          if (pending.length && rounds < maxRounds && (!running.size || urgent)) leadP = review();
+        }
       }
       if (!leadP && !running.size) break;
-      const next = await Promise.race([...running.values(), leadP].filter(Boolean));
+      // while the lead thinks, a new message waits for its answer
+      if (!leadP && !fatal) msgP ||= mail.next();
+      const next = await Promise.race([...running.values(), leadP, leadP || fatal ? null : msgP].filter(Boolean));
+      if (next.kind === 'msg') { msgP = null; continue; }
       if (next.kind === 'task') {
         running.delete(next.x.id);
         busy.delete(next.x.w.lane);
@@ -661,6 +718,9 @@ async function drive(ctx, makePrompt, phaseTitle) {
     }
     if (fatal) throw fatal;
   } catch (err) {
+    ctx.listen?.(null);
+    // messages the lead never got: they open its next turn (followUp)
+    if (inbox.length) st.unread = [...(st.unread || []), ...inbox.splice(0)];
     // Remember where we stopped: the next message continues from here (see followUp).
     if (planned) { pending = [...inflight, ...pending]; inflight = []; persist(); }
     const kind = err?.name === 'AbortError' ? 'abort' : errorKind(err);
@@ -670,6 +730,7 @@ async function drive(ctx, makePrompt, phaseTitle) {
     if (kind !== 'abort') ctx.note('Kaldığı yer kaydedildi; "devam et" yazarak sürdürebilirsin.', 'info');
     throw err;
   }
+  ctx.listen?.(null);
   st.unseen = [];
   st.open = [];
   if (pending.length) ctx.note('Denetim sınırına ulaşıldı; son görevlerin raporları yöneticiye gösterilemedi.', 'warn');
@@ -683,6 +744,7 @@ export default {
   async start(ctx) {
     const st = ctx.state;
     st.goal = ctx.config.prompt;
+    openMailbox(ctx);
     if (!ctx.meta.git) ctx.note('Proje bir git deposu değil; yönetici değişiklikleri diff olarak göremeyecek (dosyaları okuyarak denetler).', 'warn');
     await refreshQuota(ctx);
     const workers = teamView(ctx, workerList(ctx));
@@ -717,6 +779,11 @@ export default {
       await diffSince(ctx, before);
       ctx.emit({ kind: 'result', lane: w.lane, text: r.text });
       return 'waiting';
+    }
+    openMailbox(ctx);
+    if (st.unread?.length) { // written while the last loop ran, never seen by the lead
+      text = [...st.unread, text].join('\n\n');
+      st.unread = [];
     }
     const resumed = ctx.canResume('lead');
     await refreshQuota(ctx);
