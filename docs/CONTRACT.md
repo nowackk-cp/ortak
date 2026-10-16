@@ -37,6 +37,17 @@ server/
     team.js               planner -> workers -> reviewer pipeline       (owner: core)
     lead.js               lead delegates to sub-agents, reviews, loops  (owner: core)
     textcoder.js          READ / SEARCH-REPLACE hands for edit:false agents (owner: core)
+    diffview.js           per-file, budgeted view of a diff for reviewers   (owner: core)
+  tools/                  Ortak's hands, shared by the text protocol and function calling (owner: core)
+    paths.js              safePath / allFiles
+    budget.js             toolCaps(adapter): output sizes per agent (Groq small, Gemini large)
+    edit.js               fuzzy search/replace (exact → trailing ws → indentation), multi edit, line ranges
+    check.js              syntax check after an edit (node --check, JSON.parse, Python ast)
+    files.js              find_files (glob), delete_file, move_file (checkpointed)
+    symbols.js            outline / find_symbol (regex, common languages)
+    project.js            instruction files (AGENTS.md…) + project map for first messages
+    gittools.js           read-only git: status / diff (untracked incl.) / log / show
+    web.js                web_search (DuckDuckGo HTML) / web_fetch (public http(s) only) — setting webTools
   adapters/
     base.js               shared helpers (which, spawnCli, runJsonl)    (owner: lead, read-only for others)
     index.js              registry                                      (owner: lead)

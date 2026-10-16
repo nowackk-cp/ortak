@@ -89,7 +89,7 @@ export function shell() {
  * Runs `cmd` in `cwd`. Resolves { code, output, timedOut } — never rejects for a failing command.
  * Rejects with AbortError when `signal` aborts (the process tree is killed).
  */
-export async function runCommand(cmd, { cwd, signal, timeoutMs = COMMAND_TIMEOUT_MS }) {
+export async function runCommand(cmd, { cwd, signal, timeoutMs = COMMAND_TIMEOUT_MS, outputMax = OUTPUT_MAX }) {
   const sh = shell();
   return new Promise((resolve, reject) => {
     const child = spawn(sh.file, sh.args(cmd), {
@@ -101,7 +101,7 @@ export async function runCommand(cmd, { cwd, signal, timeoutMs = COMMAND_TIMEOUT
     let dropped = 0;
     const add = (d) => {
       out += d.toString('utf8');
-      if (out.length > OUTPUT_MAX * 4) { dropped += out.length - OUTPUT_MAX * 2; out = out.slice(-OUTPUT_MAX * 2); }
+      if (out.length > outputMax * 4) { dropped += out.length - outputMax * 2; out = out.slice(-outputMax * 2); }
     };
     child.stdout.on('data', add);
     child.stderr.on('data', add);
@@ -116,9 +116,10 @@ export async function runCommand(cmd, { cwd, signal, timeoutMs = COMMAND_TIMEOUT
       if (signal?.aborted) { const e = new Error('İptal edildi'); e.name = 'AbortError'; reject(e); return; }
       // eslint-disable-next-line no-control-regex
       let text = out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r\n?/g, '\n').trimEnd();
-      if (text.length > OUTPUT_MAX || dropped) {
-        const cut = dropped + Math.max(0, text.length - OUTPUT_MAX);
-        text = `${text.slice(0, 1500)}\n…(${cut} karakter çıktı atlandı)…\n${text.slice(-(OUTPUT_MAX - 1500))}`;
+      if (text.length > outputMax || dropped) {
+        const head = Math.min(1500, Math.floor(outputMax * 0.25));
+        const cut = dropped + Math.max(0, text.length - outputMax);
+        text = `${text.slice(0, head)}\n…(${cut} karakter çıktı atlandı)…\n${text.slice(-(outputMax - head))}`;
       }
       resolve({ code: timedOut ? null : code, output: text, timedOut });
     });

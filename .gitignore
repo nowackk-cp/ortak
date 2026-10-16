@@ -1,5 +1,5 @@
 node_modules/
-tools/
+/tools/
 *.log
 
 # Yerel veriler: API anahtarları (evren/groq/openrouter.json), Gemini oturumu, sohbet geçmişi, ayarlar

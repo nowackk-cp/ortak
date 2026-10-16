@@ -1,6 +1,6 @@
-// Performance settings, persisted in data/settings.json and edited from the UI
-// (GET/PUT /api/settings). Everything here is about keeping the machine responsive while several
-// agents (and their desktop apps) run in the background.
+// Settings, persisted in data/settings.json and edited from the UI (GET/PUT /api/settings): mostly
+// about keeping the machine responsive while several agents (and their desktop apps) run in the
+// background, plus whether agents may use the internet tools.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -15,6 +15,7 @@ export const DEFAULTS = Object.freeze({
   antigravityAutoStart: true, // open Antigravity on demand when a turn needs it
   antigravityIdleMinutes: 0,  // close Antigravity *if Ortak opened it* after this long idle; 0 = never
   limitsRefreshMinutes: 5,    // UI refreshes quotas this often while visible; 0 = only by hand
+  webTools: true,             // agents without their own tools may search the web / fetch pages (tools/web.js)
 });
 
 const int = (min, max) => (v) => {
@@ -30,6 +31,7 @@ const RULES = {
   antigravityAutoStart: bool,
   antigravityIdleMinutes: int(0, 240),
   limitsRefreshMinutes: int(0, 120),
+  webTools: bool,
 };
 
 function clean(obj) {

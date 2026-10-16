@@ -1,4 +1,4 @@
-// "Performans" dialog: GET/PUT /api/settings. Every change is saved immediately.
+// "Ayarlar" dialog (performance + internet tools): GET/PUT /api/settings. Every change is saved immediately.
 import { h, icon, spinner } from './dom.js';
 import { api, toast } from './api.js';
 
@@ -44,6 +44,12 @@ const FIELDS = [
     label: 'Ortak’ın açtığı Antigravity’yi boşta kalınca kapat',
     hint: 'Sadece Ortak’ın açtığı Antigravity, bu süre hiçbir Ortak turu çalışmazsa normal şekilde kapatılır. O pencerede kendin çalışıyorsan kapalı bırak.',
     options: [0, 10, 15, 30, 60].map((v) => [v, minutes(v)]),
+  },
+  {
+    key: 'webTools',
+    label: 'Ajanlar internete erişebilsin',
+    hint: 'Kendi aracı olmayan modeller (Groq, OpenRouter, Gemini web…) web’de arama yapıp sayfa okuyabilir (dokümantasyon, hata mesajları). Yerel ağ adreslerine erişim her zaman kapalıdır.',
+    type: 'bool',
   },
   {
     key: 'limitsRefreshMinutes',
@@ -105,9 +111,9 @@ export function openPerfDialog({ onChange } = {}) {
   }
 
   const back = h('div', { class: 'modal-back', onclick: (e) => { if (e.target === back) close(); } },
-    h('div', { class: 'modal perf-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Performans' },
+    h('div', { class: 'modal perf-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Ayarlar' },
       h('div', { class: 'modal-head' },
-        h('strong', { text: 'Performans' }),
+        h('strong', { text: 'Ayarlar' }),
         h('button', { type: 'button', class: 'icon-btn', title: 'Kapat', 'aria-label': 'Kapat', onclick: close }, icon('x'))),
       body,
       h('div', { class: 'modal-foot' },

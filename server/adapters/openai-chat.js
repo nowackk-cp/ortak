@@ -11,6 +11,54 @@
 const MAX_TOOL_STEPS = 40;
 const SAVED_TOOL_OUTPUT_MAX = 6000; // tool results kept in a saved session (older results are clipped)
 
+// Characters of conversation (system + history + this turn's tool calls and results) sent per
+// request. A tool loop resends everything on every step, so without a cap a few file reads push a
+// free-tier model past its window or per-minute token limit (Groq: ~8000 tokens/minute).
+const CONTEXT_CHARS = { groq: 22_000, openrouter: 90_000, evren: 120_000 };
+const DEFAULT_CONTEXT_CHARS = 90_000;
+const OLD_TOOL_KEEP = 400;          // chars kept of a compacted tool result
+const COMPACT_NOTE = '[Ortak] Bağlam sınırı nedeniyle bu araç çıktısı kısaltıldı; gerekirse aracı yeniden çağır.';
+
+const msgSize = (m) => String(m.content ?? '').length +
+  (m.tool_calls ? m.tool_calls.reduce((n, c) => n + String(c.function?.arguments ?? '').length + 40, 0) : 0) + 20;
+
+/**
+ * Keeps `messages` under `limit` characters, in place. `turnMsg` = this turn's user message
+ * (older messages are history). In order: shorten tool results before the last tool round, drop
+ * the oldest history turns, shorten the remaining tool results. The system message, the current
+ * user message and the pairing of tool calls with their results are always kept.
+ * Returns the number of characters removed.
+ */
+export function compactMessages(messages, limit, turnMsg = messages.findLast((m) => m.role === 'user')) {
+  const total = () => messages.reduce((n, m) => n + msgSize(m), 0);
+  const before = total();
+  if (before <= limit) return 0;
+  const shorten = (m, keep) => {
+    const c = String(m.content ?? '');
+    if (c.length > keep + COMPACT_NOTE.length) m.content = `${c.slice(0, keep)}\n…\n${COMPACT_NOTE}`;
+  };
+  const lastRound = messages.findLastIndex((m) => m.role === 'assistant' && m.tool_calls?.length);
+  // 1. old tool results (history and earlier rounds of this turn)
+  for (let i = 0; i < messages.length && total() > limit; i++) {
+    if (messages[i].role === 'tool' && i < lastRound) shorten(messages[i], OLD_TOOL_KEEP);
+  }
+  // 2. oldest history turns (from just after the system message up to the next user message)
+  const first = messages[0]?.role === 'system' ? 1 : 0;
+  let start = Math.max(0, messages.indexOf(turnMsg));
+  while (total() > limit && start > first) {
+    let end = first + 1;
+    while (end < start && messages[end].role !== 'user') end++;
+    const n = end - first;
+    messages.splice(first, n);
+    start -= n;
+  }
+  // 3. this turn's results, newest last
+  for (let i = 0; i < messages.length && total() > limit; i++) {
+    if (messages[i].role === 'tool') shorten(messages[i], Math.max(OLD_TOOL_KEEP, Math.floor(limit / 8)));
+  }
+  return before - total();
+}
+
 const unsupported = new Set(); // `${adapter}:${model}` that rejected tools this process
 
 /** false when this model already rejected tools; undefined when we don't know yet. */
@@ -114,8 +162,11 @@ function parseArgs(raw) {
  * @param {{defs: object[], exec: (name:string, args:object)=>Promise<string>}} [o.tools]
  * @returns {Promise<{text:string, usage:object|null, finish:string|null, toolSteps:number}>}
  */
-export async function chatTurn({ adapter, request, fail, describe, label, body, messages, tools, signal, emit, timeoutMs, maxSteps = MAX_TOOL_STEPS }) {
+export async function chatTurn({ adapter, request, fail, describe, label, body, messages, tools, signal, emit, timeoutMs, maxSteps = MAX_TOOL_STEPS, contextChars }) {
   if (!tools) messages.splice(0, messages.length, ...flattenToolHistory(messages));
+  const limit = contextChars || CONTEXT_CHARS[adapter] || DEFAULT_CONTEXT_CHARS;
+  const turnMsg = messages.findLast((m) => m.role === 'user');
+  let compactedNote = false;
   const usage = { inputTokens: 0, outputTokens: 0 };
   let sawUsage = false;
   let malformed = 0;
@@ -125,6 +176,11 @@ export async function chatTurn({ adapter, request, fail, describe, label, body, 
 
   for (let step = 0; ; step++) {
     const last = tools && step >= maxSteps;
+    const removed = compactMessages(messages, limit, turnMsg);
+    if (removed && !compactedNote) {
+      compactedNote = true;
+      emit({ type: 'status', text: `${label}: bağlam sınırına yaklaşıldı; eski araç çıktıları kısaltıldı.` });
+    }
     let res;
     try {
       res = await request('/chat/completions', {

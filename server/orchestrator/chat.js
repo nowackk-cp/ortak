@@ -4,7 +4,7 @@ import * as P from './prompts.js';
 import { clip } from '../util.js';
 import { mayBeStaleSession } from '../errors.js';
 import * as git from '../git.js';
-import { listing, stripEdits, textChatTurn } from './textcoder.js';
+import { listingFor, stripEdits, textChatTurn } from './textcoder.js';
 
 const DIFF_EVENT_MAX = 1_500_000;
 
@@ -18,7 +18,7 @@ async function textTurn(ctx, laneId, text) {
   const resumable = ctx.canResume(laneId);
   const prior = history.slice(-HISTORY_MAX);
   const first = !history.length;
-  const body = first ? P.textChatIntro({ listing: await listing(ctx.meta.cwd), text }) : text;
+  const body = first ? P.textChatIntro({ listing: await listingFor(ctx, laneId), text }) : text;
   const prompt = resumable || !prior.length ? body : P.chatWithTranscript(prior, body);
 
   history.push({ role: 'user', text: clip(text, HISTORY_MSG_MAX) });

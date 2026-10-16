@@ -42,14 +42,25 @@ Ortak bu modellerin cevabında birkaç basit komut arar ve hepsini **kendisi yap
 
 ```text
 LIST: src/                 klasörde gez
+FIND: *.test.js            adına göre dosya bul
+OUTLINE: src/fiyat.js      fonksiyon ve sınıfları satır numaralarıyla gör
+SYMBOL: indirimHesapla     tanımın yerini bul
 READ: src/fiyat.js:1495-1515   sadece o satırları oku
 GREP: indirimHesapla       tüm projede ara
+GIT: diff                  kendi değişikliklerini gözden geçir
 RUN:  npm test             terminalde çalıştır (PowerShell / sh)
+WEB: node fetch timeout    internette ara  ·  FETCH: https://…  sayfayı oku
+DELETE: eski.js  ·  MOVE: a.js -> lib/a.js   dosya sil / taşı (geri alınabilir)
 ```
 
 Modelin verdiği değişiklik blokları dosyaya uygulanır ve sonucu modele geri gönderilir. Model de Codex gibi çalışır: okur, düzeltir, test eder, tekrar dener.
 
-> 🛠️ **Gerçek araç çağırma.** Groq, OpenRouter ve EVREN'deki modellerin çoğu *function calling* destekler; Cline ya da Kilo gibi araçlar DeepSeek'i de bu yöntemle kullanır. Bu modellere Ortak aynı elleri gerçek araçlar olarak verir: `list_dir`, `read_file`, `grep`, `run_command`, `edit_file`, `write_file`. Araç desteklemeyen bir model seçilirse Ortak bunu kendisi fark eder ve yukarıdaki yazı komutlarına geçer.
+- **Girintiyi yanlış yazsa da uygulanır.** Ücretsiz modeller boşlukları sık bozar; Ortak metni girinti farkını yok sayarak bulur ve yeni satırları dosyanın girintisine oturtur. Bulamazsa dosyadaki en yakın yeri gösterir.
+- **Bozduysa hemen duyar.** Her düzenlemeden sonra dosya sözdizimi kontrolünden geçer (JavaScript, JSON, Python); hata varsa model aynı turda düzeltir.
+- **Projenin kurallarını bilir.** `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules` gibi talimat dosyaları ilk mesajda modele verilir; büyük projelerde 400 dosyalık liste yerine klasör haritası gider.
+- **Bağlamı taşmaz.** Araç çıktıları modelin kaldırabileceği kadar kısaltılır (Groq'un ücretsiz katmanına küçük, Gemini'ye büyük); konuşma uzayınca eski çıktılar özetlenir.
+
+> 🛠️ **Gerçek araç çağırma.** Groq, OpenRouter ve EVREN'deki modellerin çoğu *function calling* destekler; Cline ya da Kilo gibi araçlar DeepSeek'i de bu yöntemle kullanır. Bu modellere Ortak aynı elleri gerçek araçlar olarak verir: `list_dir`, `find_files`, `read_file`, `outline`, `find_symbol`, `grep`, `git`, `run_command`, `web_search`, `web_fetch`, `edit_file`, `multi_edit`, `replace_lines`, `write_file`, `delete_file`, `move_file`. Araç desteklemeyen bir model seçilirse Ortak bunu kendisi fark eder ve yukarıdaki yazı komutlarına geçer.
 
 <details>
 <summary><b>▸ Perde arkası: bir tur nasıl dönüyor?</b></summary>
