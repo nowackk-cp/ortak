@@ -1,6 +1,7 @@
 // Agent discovery (detect + listModels) and quota (getLimits) aggregation with caching.
 // Every adapter call runs in parallel with an 8 s timeout; results are cached for 60 s.
 import { loadAdapters } from './adapters/index.js';
+import { modelTier } from './tiers.js';
 
 const TTL_MS = 60_000;
 const CALL_TIMEOUT_MS = 8_000;
@@ -58,7 +59,8 @@ async function probe(a) {
     version: d?.version ?? null,
     reason: d ? (d.available ? null : d.reason || 'Bulunamadı') : (det.reason?.message || String(det.reason)),
     capabilities: { ...DEFAULT_CAPS, ...(a.capabilities || {}) },
-    models: mods.status === 'fulfilled' ? normModels(mods.value) : [],
+    // tier: what the model costs the user (tiers.js) — free / subscription / paid
+    models: mods.status === 'fulfilled' ? normModels(mods.value).map((m) => ({ ...m, tier: modelTier(a.id, m) })) : [],
     startable: typeof a.start === 'function',
     // Sign-in from the UI (POST /api/agents/:id/login): required when unavailable for lack of an
     // account, optional when it only unlocks more models.

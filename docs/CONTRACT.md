@@ -213,6 +213,7 @@ All JSON. Errors → `{ error: "Türkçe mesaj" }` with 4xx/5xx.
 |----------------------------------|--------------|----------|
 | `GET  /api/agents`               | | `[{ id, name, available, version, reason, capabilities, models }]` (detect cached 60s; `?refresh=1`) |
 | `GET  /api/limits`               | | `{ [agentId]: { ok, items, note, updatedAt, error? } }` (cached 60s; `?refresh=1`) |
+| `GET  /api/team/auto`            | `?budget=&lead=&leadModel=` | `{ budget, workers: [{ agentId, model, name, modelLabel, tier, backup }] }` |
 | `GET  /api/runs`                 | | `[meta]` newest first |
 | `POST /api/agents/:id/login`     | | `{ ok, pending?, message? }` opens the agent's own sign-in |
 | `POST /api/runs`                 | RunConfig | `{ runId }` |
@@ -270,7 +271,12 @@ turn's system prompt gets `CHAT_SURFACE` (plain conversation, no file/shell tool
 // state.unseen (görmediği raporlar), state.open (bitmeyen görevler), state.interrupted kaydedilir ve sonraki mesaj
 // bunlarla 'kaldığı yerden' devam eder. ctx.turn geçici hataları (çıktı yoksa) 20 sn / 60 sn sonra yeniden dener
 // ({type:'status', retry:true} olayı); limit/ağ/giriş hatalarında oturum (sessionId) asla silinmez.
-{ mode: 'lead', cwd, prompt, lead: { agentId, model }, workers: [{ agentId, model }], steps: 8, permission }
+// budget: 'free-first' (varsayılan) | 'free-only' | 'any' — her ajan/model bir ücret sınıfı taşır (tiers.js: free |
+// subscription | paid; /api/agents modellerinde `tier`). Yönetici ekibi ücret sınıfı ve kota durumuyla görür ve
+// bütçe kurallarına uyar. workers: 'auto' → ekibi tiers.autoTeam() seçer (GET /api/team/auto önizler).
+// Bir alt ajan limit/oturum/ağ/boyut hatası verirse görev aynı ücret sınıfındaki boştaki başka ajana devredilir
+// (state.exhausted: limiti dolan şeritler; onlara verilen görevler yönlendirilir).
+{ mode: 'lead', cwd, prompt, lead: { agentId, model }, workers: [{ agentId, model }] | 'auto', budget: 'free-first', steps: 8, permission }
 ```
 
 The same agent may appear more than once (e.g. two Claude models); lanes are made unique as

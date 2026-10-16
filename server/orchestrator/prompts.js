@@ -434,15 +434,44 @@ export const leadSystem =
   'işi alt ajanlara dağıtır, sonuçlarını denetler, gerekirse düzeltme görevi verirsin. ' +
   `Proje dosyalarını okuyarak denetleyebilirsin. ${LANG} ${READ_ONLY}`;
 
-/** `workers` = [{ handle, title, canEdit, canRun, textOnly }] */
+const COST_TR = {
+  free: 'ÜCRETSİZ',
+  subscription: 'ABONELİK — kullanıcının ücretli plan limitini harcar',
+  paid: 'ÜCRETLİ — token başına para harcar',
+};
+
+/** `workers` = [{ handle, title, canEdit, canRun, textOnly, tier?, backup?, quota?, exhausted? }] */
 function teamList(workers) {
   const what = (w) => {
     if (w.textOnly) return 'dosyalara doğrudan erişemez: Ortak onun istediği dosyaları okur, verdiği değişiklikleri uygular ve istediği komutları çalıştırır (test koşabilir)';
     if (!w.canEdit) return 'sadece okur';
     return w.canRun ? 'dosya düzenleyebilir ve komut çalıştırabilir (test koşabilir)' : 'dosya düzenleyebilir ama bu çalışmada komut çalıştıramaz (test koşamaz)';
   };
-  return workers.map((w) => `- @${w.handle} — ${w.title} — ${what(w)}`).join('\n');
+  const cost = (w) => (w.tier ? ` — ${COST_TR[w.tier] || w.tier}${w.backup ? ' (YEDEK)' : ''}` : '');
+  const quota = (w) => (w.exhausted ? ' — LİMİTİ DOLDU, görev verme' : w.quota ? ` — kota: ${w.quota}` : '');
+  return workers.map((w) => `- @${w.handle} — ${w.title}${cost(w)} — ${what(w)}${quota(w)}`).join('\n');
 }
+
+/** Budget rules for the lead (`budget` = free-first | free-only | any; undefined = older runs). */
+function budgetRules(budget, workers = []) {
+  const backups = workers.some((w) => w.backup);
+  const out = [];
+  if (budget === 'free-first') {
+    out.push('- BÜTÇE (ücretsiz öncelikli): Kullanıcı Claude / ChatGPT gibi abonelik limitlerini korumak istiyor. Bütün görevleri ÜCRETSİZ ajanlara ver.' +
+      (backups ? ' "YEDEK" işaretli ajanlara yalnızca bir görev ücretsiz ajanlarda iki kez başarısız olduysa ya da iş gerçekten en güçlü modeli gerektiriyorsa görev ver ve nedenini görev metninde tek cümleyle yaz.' : ''));
+  } else if (budget === 'free-only') {
+    out.push('- BÜTÇE (yalnızca ücretsiz): Ekipte yalnızca ücretsiz ajanlar var; işi aralarında paylaştır.');
+  }
+  if (budget === 'free-first' || budget === 'free-only') {
+    out.push('- KENDİ LİMİTİNİ KORU: Sen ekipteki en pahalı modelsin; senin her cevabın kullanıcının limitinden gider. Projeyi kendin uzun uzun okuma: ' +
+      'keşif gerekiyorsa ilk görevi bir ücretsiz ajana "projeyi incele; şu sorulara cevap ver, ilgili dosya ve satırları raporla" diye ver ve planını onun raporuna göre yap. ' +
+      'Denetimde raporlara ve diff\'e dayan, yalnızca şüpheli yerleri kendin oku. Cevaplarını kısa tut.');
+    out.push('- Ücretsiz modeller daha zayıf olabilir: görevleri küçük, net ve tek dosyaya yakın tut; kabul ölçütünü açıkça yaz. Limiti dolan bir ajanın görevini Ortak kendiliğinden başka bir ajana devreder.');
+  }
+  return out.length ? `${out.join('\n')}\n` : '';
+}
+
+const rules = (budget, workers) => `${PARALLEL_RULES}${budgetRules(budget, workers)}`;
 
 const LEAD_FORMAT =
   'Her cevabının sonunda tek bir ```json bloğu ver:\n' +
@@ -463,11 +492,11 @@ const PARALLEL_RULES =
   '- Her ajan aynı anda tek iş yapar; aynı ajana verdiğin görevler sırayla çalışır. Hız için işleri farklı ajanlara dağıt.\n' +
   '- Aynı dosyayı değiştiren iki görev aynı anda çalışmasın: ya tek görevde birleştir ya da "after" ile sırala.\n';
 
-export function leadStart({ goal, workers, readOnly, maxSteps }) {
+export function leadStart({ goal, workers, readOnly, maxSteps, budget }) {
   return `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
     'Kurallar:\n' +
     '- Gerekirse önce projeyi incele, sonra işi parçalara böl ve her parçayı en uygun ajana ver: zor işleri güçlü modellere, basit işleri hızlı ve ucuz modellere.\n' +
-    PARALLEL_RULES +
+    rules(budget, workers) +
     '- Her görev tek başına anlaşılır olsun (ajan büyük resmi bilmiyor): hedef, ilgili dosyalar, kabul ölçütü.\n' +
     '- Görevler bitince raporları ve değişikliklerin diff\'i sana gelir; bir görev başarısız olursa diğerleri sürerken hemen haber verilir. ' +
     'Denetle; hata ya da eksik varsa somut bir düzeltme görevi ver. Test/çalıştırma gerekiyorsa komut çalıştırabilen bir ajana ver.\n' +
@@ -523,15 +552,15 @@ export function leadReport({ round, maxRounds, reports, running, waiting, diff, 
     `\n\n${LEAD_FORMAT}`;
 }
 
-export function leadUser({ text, workers, maxSteps, goal, resumed, log }) {
-  return (resumed ? '' : `İlk istek:\n${goal}\n\nEkibin:\n${teamList(workers)}\n\nKurallar:\n${PARALLEL_RULES}\n${history(log)}`) +
+export function leadUser({ text, workers, maxSteps, goal, resumed, log, budget }) {
+  return (resumed ? '' : `İlk istek:\n${goal}\n\nEkibin:\n${teamList(workers)}\n\nKurallar:\n${rules(budget, workers)}\n${history(log)}`) +
     `Kullanıcının yeni mesajı:\n${text}\n\nBuna göre ekibe görev ver ya da iş gerekmiyorsa done:true ile cevapla. En fazla ${maxSteps} denetim turun var.\n\n${LEAD_FORMAT}`;
 }
 
 /** Prepended when the lead's session was lost: the context a fresh session needs. */
-export function leadRecap({ goal, workers, log }) {
+export function leadRecap({ goal, workers, log, budget }) {
   return `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
-    `Kurallar:\n${PARALLEL_RULES}\n${history(log)}` +
+    `Kurallar:\n${rules(budget, workers)}\n${history(log)}` +
     '(Önceki oturumun kayboldu; gerekirse projenin şu anki hâlini dosyaları okuyarak incele.)\n\n';
 }
 
@@ -539,8 +568,8 @@ export function leadRecap({ goal, workers, log }) {
  * The run stopped mid-way (usage limit, error, cancel, restart) and the user wants to go on:
  * reports the lead never saw + tasks that didn't finish.
  */
-export function leadResume({ text, interrupted, unseen, open, log, workers, maxSteps, goal, resumed }) {
-  return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\nKurallar:\n${PARALLEL_RULES}\n${history(log)}`) +
+export function leadResume({ text, interrupted, unseen, open, log, workers, maxSteps, goal, resumed, budget }) {
+  return (resumed ? '' : `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\nKurallar:\n${rules(budget, workers)}\n${history(log)}`) +
     `Çalışma yarıda kesilmişti${interrupted?.reason ? ` (${clip(interrupted.reason, 300)})` : ''}.\n\n` +
     (unseen.length ? `Sen görmeden biten görevlerin raporları:\n\n${reportBlocks(unseen)}\n\n` : '') +
     (open.length

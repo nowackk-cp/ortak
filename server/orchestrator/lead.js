@@ -13,12 +13,19 @@ import { jsonCandidates } from './json.js';
 import { stripEdits, textCoderTask, work } from './textcoder.js';
 import { errorKind, mayBeStaleSession } from '../errors.js';
 import { promptBudget, reviewDiff } from './diffview.js';
+import { getLimits } from '../limits.js';
+import { modelTier, TIER_TR } from '../tiers.js';
 
 const MAX_TASKS_PER_REPLY = 12; // tasks taken from one lead answer
 const MAX_TASKS_TOTAL = 40;     // per lead loop
 // Lead failures after which the run waits for "devam et" instead of ending in an error.
 const PAUSE_KINDS = new Set(['limit', 'transient', 'auth']);
 const DIFF_EVENT_MAX = 1_500_000;
+// A failed task is handed to another worker when the failure is about that agent, not the task.
+const HANDOFF_KINDS = new Set(['limit', 'transient', 'auth', 'toolarge']);
+const HANDOFF_MAX = 2;          // other workers tried per task
+const QUOTA_WAIT_MS = 3000;     // how long a run start waits for the quota overview
+const KIND_TR = { limit: 'limiti doldu', transient: 'geçici bir hata verdi', auth: 'oturumu kapalı', toolarge: 'isteği kaldıramadı' };
 
 // ---- names ------------------------------------------------------------------------------------
 
@@ -65,8 +72,13 @@ function workerList(ctx) {
     used.add(handle);
     const caps = ctx.adapterOf(l.lane)?.capabilities || {};
     const edit = !!caps.edit;
+    const tier = l.tier || modelTier(l.agentId, null);
     return {
       lane: l.lane, agentId: l.agentId, model: l.model, title: shortTitle(l.title), handle,
+      tier,
+      backup: ctx.config.budget === 'free-first' && tier !== 'free',
+      quota: st.quota?.[l.agentId] || null,
+      exhausted: (st.exhausted || []).includes(l.lane),
       textOnly: !edit,
       canEdit: edit && !readOnly,
       // editShell false: the agent can't run commands in 'edit' mode (Claude Code on Windows)
@@ -83,6 +95,27 @@ const teamView = (ctx, workers) => {
   const readOnly = ctx.config.permission === 'read-only';
   return workers.map((w) => ({ ...w, textOnly: w.textOnly && !readOnly }));
 };
+
+/** "%80 kullanıldı" / "950 / 1000 istek kaldı" per agent, for the lead's team list (best effort). */
+async function refreshQuota(ctx) {
+  try {
+    const limits = await Promise.race([getLimits(), new Promise((r) => setTimeout(() => r(null), QUOTA_WAIT_MS))]);
+    if (!limits) return;
+    const out = {};
+    for (const l of ctx.lanes('worker')) {
+      const lim = limits[l.agentId];
+      if (!lim?.ok || !lim.items?.length) continue;
+      const pct = lim.items.map((x) => Number(x.usedPercent)).filter((n) => Number.isFinite(n));
+      if (pct.length) {
+        const max = Math.max(...pct);
+        out[l.agentId] = max >= 95 ? `neredeyse dolu (%${Math.round(max)} kullanıldı)` : `%${Math.round(max)} kullanıldı`;
+      } else if (lim.items[0]?.text) {
+        out[l.agentId] = line(lim.items[0].text, 80);
+      }
+    }
+    ctx.state.quota = out;
+  } catch { /* quota is a hint only */ }
+}
 
 /** The worker the lead meant by `name` (handle, lane, agent id, model id or a word of its title). */
 export function resolveWorker(workers, name) {
@@ -139,6 +172,7 @@ const prose = (text) => String(text || '').replace(/```json[\s\S]*?```/gi, '').t
 // read-only hands (textcoder.work), like a text-only worker.
 async function leadTurn(ctx, prompt) {
   const resumable = ctx.canResume('lead');
+  ctx.state.leadTurns = (ctx.state.leadTurns || 0) + 1;
   try {
     return await work(ctx, 'lead', { prompt, permission: 'read-only', system: P.leadSystem });
   } catch (err) {
@@ -147,7 +181,7 @@ async function leadTurn(ctx, prompt) {
     if (!resumable || err.sawOutput || err.name === 'AbortError' || !mayBeStaleSession(err)) throw err;
     ctx.note('Yöneticinin önceki oturumu sürdürülemedi; yeni oturum başlatılıyor.', 'warn');
     ctx.lane('lead').sessionId = undefined;
-    const recap = P.leadRecap({ goal: ctx.state.goal, workers: teamView(ctx, workerList(ctx)), log: ctx.state.log });
+    const recap = P.leadRecap({ goal: ctx.state.goal, workers: teamView(ctx, workerList(ctx)), log: ctx.state.log, budget: ctx.config.budget });
     return work(ctx, 'lead', { prompt: `${recap}${prompt}`, permission: 'read-only', system: P.leadSystem, resume: false });
   }
 }
@@ -230,8 +264,17 @@ async function runTask(ctx, w, t) {
     return { ...base, ok: true, text: r.text };
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    return { ...base, ok: false, text: `Hata: ${err.message}` };
+    return { ...base, ok: false, kind: errorKind(err), text: `Hata: ${err.message}` };
   }
+}
+
+const BUDGET_TR = { 'free-first': 'ücretsiz öncelikli', 'free-only': 'yalnızca ücretsiz', any: 'serbest' };
+
+/** The automatic team, as shown to the user at the start of a run. */
+function teamNote(workers, budget) {
+  const tag = (w) => (w.tier === 'free' ? 'ücretsiz' : `${TIER_TR[w.tier] || w.tier}${w.backup ? ', yedek' : ''}`);
+  return `**Ekip (otomatik · ${BUDGET_TR[budget] || budget})**\n` +
+    workers.map((w) => `- @${w.handle} · ${w.title} _(${tag(w)})_${w.quota ? ` — kota: ${w.quota}` : ''}`).join('\n');
 }
 
 // ---- driver -----------------------------------------------------------------------------------
@@ -256,7 +299,17 @@ function pauseNote(kind, err) {
   return `Yönetici geçici bir hata yüzünden durdu (${msg}). Kaldığı yer kaydedildi; biraz sonra "devam et" yaz.`;
 }
 
-function composeResult(ctx, d, totals) {
+/** "ücretsiz ajanlar 6 görev · abonelik 1 görev · yönetici 4 tur" */
+function costLine(done, leadTurns) {
+  const by = new Map();
+  for (const r of done) if (r.tier) by.set(r.tier, (by.get(r.tier) || 0) + 1);
+  const parts = ['free', 'subscription', 'paid'].filter((t) => by.has(t))
+    .map((t) => `${t === 'free' ? 'ücretsiz ajanlar' : TIER_TR[t]} ${by.get(t)} görev`);
+  if (leadTurns) parts.push(`yönetici ${leadTurns} tur`);
+  return parts.length ? `**Maliyet:** ${parts.join(' · ')}` : '';
+}
+
+function composeResult(ctx, d, totals, leadTurns) {
   const st = ctx.state;
   const lines = [d?.summary || prose(d?.text) || '(özet yok)'];
   const done = st.log.slice(st.logFrom || 0).sort((a, b) => (a.n ?? 0) - (b.n ?? 0));
@@ -271,6 +324,8 @@ function composeResult(ctx, d, totals) {
     const { files, additions, deletions } = totals.stats;
     lines.push('', `**Değişiklikler:** ${files} dosya (+${additions} / −${deletions})`);
   }
+  const cost = costLine(done, leadTurns);
+  if (cost) lines.push('', cost);
   return lines.join('\n');
 }
 
@@ -281,6 +336,7 @@ async function drive(ctx, firstPrompt, phaseTitle) {
   st.log ||= [];
   st.logFrom = st.log.length;
   st.taskSeq ||= 0;
+  const turnsFrom = st.leadTurns || 0;
   const startTree = await snapshot(ctx);
   let reviewTree = startTree;
   ctx.save();
@@ -308,12 +364,46 @@ async function drive(ctx, firstPrompt, phaseTitle) {
     ctx.save();
   };
 
+  // Another worker for a task `w` couldn't do: same cost tier first (a free task stays free), then
+  // free ones, idle before busy; a subscription backup only when no free worker is left.
+  const alternative = (w, tried) => {
+    const out = new Set(st.exhausted || []);
+    const rank = (c) => (c.tier === w.tier ? 0 : c.tier === 'free' ? 2 : 4) + (busy.has(c.lane) ? 1 : 0);
+    return workers
+      .filter((c) => c.lane !== w.lane && !tried.has(c.lane) && !out.has(c.lane))
+      .filter((c) => ctx.config.budget !== 'free-only' || c.tier === 'free')
+      .sort((a, b) => rank(a) - rank(b))[0] || null;
+  };
+
+  const markExhausted = (w) => {
+    if ((st.exhausted ||= []).includes(w.lane)) return;
+    st.exhausted.push(w.lane);
+    w.exhausted = true;
+    warnings.push(`@${w.handle} limitine ulaştı ya da oturumu kapandı; bu çalışmada ona görev verme (verirsen Ortak başka bir ajana yönlendirir).`);
+  };
+
+  /** A task that failed because of its agent (limit, sign-in, network, size) moves to another worker. */
+  const handoff = (x, r) => {
+    if (r.ok || r.skipped || !HANDOFF_KINDS.has(r.kind)) return false;
+    if (r.kind === 'limit' || r.kind === 'auth') markExhausted(x.w);
+    (x.tried ||= new Set()).add(x.w.lane);
+    if (x.tried.size > HANDOFF_MAX) return false;
+    const alt = alternative(x.w, x.tried);
+    if (!alt) return false;
+    ctx.note(`${x.id}: @${x.w.handle} ${KIND_TR[r.kind]}; görev @${alt.handle} ajanına devredildi.`, 'warn');
+    x.w = alt;
+    x.status = 'waiting';
+    x.startedAt = 0;
+    persist();
+    return true;
+  };
+
   const finishTask = (x, r) => {
     x.status = r.ok ? 'done' : r.skipped ? 'skipped' : 'failed';
     const secs = x.startedAt ? Math.round((Date.now() - x.startedAt) / 1000) : null;
     const report = { ...r, id: x.id, handle: x.w.handle, title: x.w.title, task: x.task, secs };
     pending.push(report);
-    st.log.push({ id: x.id, n: x.n, handle: x.w.handle, task: clip(x.task, 2000), ok: !!r.ok, skipped: !!r.skipped, secs });
+    st.log.push({ id: x.id, n: x.n, handle: x.w.handle, tier: x.w.tier, task: clip(x.task, 2000), ok: !!r.ok, skipped: !!r.skipped, secs });
     if (!r.ok) ctx.note(`${x.id} · @${x.w.handle}: ${r.skipped ? r.text : 'görev başarısız oldu.'}`, 'warn');
     persist();
   };
@@ -330,12 +420,19 @@ async function drive(ctx, firstPrompt, phaseTitle) {
       if (tasks.size >= MAX_TASKS_TOTAL) { warnings.push(`Görev sınırına (${MAX_TASKS_TOTAL}) ulaşıldı; fazlası çalıştırılmadı.`); break; }
       let id = t.id || `t${++st.taskSeq}`;
       while (tasks.has(id)) id = `t${++st.taskSeq}`;
-      const w = resolveWorker(workers, t.agent);
+      let w = resolveWorker(workers, t.agent);
       if (!w) {
         const names = workers.map((x) => x.handle).join(', ');
         warnings.push(`${id}: "${t.agent || '(boş)'}" adında bir ajan yok (geçerli adlar: ${names}); görev çalıştırılmadı.`);
         ctx.note(`${id}: "${t.agent || '(boş)'}" adında bir ajan yok; görev çalıştırılmadı.`, 'warn');
         continue;
+      }
+      if ((st.exhausted || []).includes(w.lane)) {
+        const alt = alternative(w, new Set());
+        if (alt) {
+          ctx.note(`${id}: @${w.handle} limitine ulaşmıştı; görev @${alt.handle} ajanına verildi.`, 'warn');
+          w = alt;
+        }
       }
       tasks.set(id, { id, n: tasks.size, w, task: t.task, files: t.files, after: t.after, status: 'waiting', startedAt: 0 });
       added.push(id);
@@ -441,7 +538,7 @@ async function drive(ctx, firstPrompt, phaseTitle) {
         running.delete(next.x.id);
         busy.delete(next.x.w.lane);
         if (next.error) throw next.error; // abort: the other tasks see the same signal
-        finishTask(next.x, next.report);
+        if (!handoff(next.x, next.report)) finishTask(next.x, next.report);
       } else {
         leadP = null;
         if (next.error?.name === 'AbortError') throw next.error;
@@ -473,7 +570,7 @@ async function drive(ctx, firstPrompt, phaseTitle) {
   st.open = [];
   if (pending.length) ctx.note('Denetim sınırına ulaşıldı; son görevlerin raporları yöneticiye gösterilemedi.', 'warn');
   const totals = await diffSince(ctx, startTree, { emit: false });
-  ctx.emit({ kind: 'result', lane: 'lead', text: composeResult(ctx, decision, totals) });
+  ctx.emit({ kind: 'result', lane: 'lead', text: composeResult(ctx, decision, totals, (st.leadTurns || 0) - turnsFrom) });
   st.summary = clip(decision?.summary || prose(decision?.text), 4000);
   ctx.save();
 }
@@ -483,9 +580,11 @@ export default {
     const st = ctx.state;
     st.goal = ctx.config.prompt;
     if (!ctx.meta.git) ctx.note('Proje bir git deposu değil; yönetici değişiklikleri diff olarak göremeyecek (dosyaları okuyarak denetler).', 'warn');
+    await refreshQuota(ctx);
     const workers = teamView(ctx, workerList(ctx));
+    if (ctx.config.autoTeam) ctx.note(teamNote(workers, ctx.config.budget));
     await drive(ctx, P.leadStart({
-      goal: st.goal, workers, readOnly: ctx.config.permission === 'read-only', maxSteps: ctx.config.steps,
+      goal: st.goal, workers, readOnly: ctx.config.permission === 'read-only', maxSteps: ctx.config.steps, budget: ctx.config.budget,
     }), 'Planlama');
     return 'waiting';
   },
@@ -513,17 +612,18 @@ export default {
       return 'waiting';
     }
     const resumed = ctx.canResume('lead');
-    const team = teamView(ctx, workers);
+    await refreshQuota(ctx);
+    const team = teamView(ctx, workerList(ctx));
     const unseen = st.unseen || [];
     const open = st.open || [];
     if (st.interrupted || unseen.length || open.length) {
       await drive(ctx, P.leadResume({
-        text, interrupted: st.interrupted, unseen, open, log: st.log, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed,
+        text, interrupted: st.interrupted, unseen, open, log: st.log, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, budget: ctx.config.budget,
       }), 'Yönetici · kaldığı yerden');
       return 'waiting';
     }
     await drive(ctx, P.leadUser({
-      text, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, log: st.log,
+      text, workers: team, maxSteps: ctx.config.steps, goal: st.goal, resumed, log: st.log, budget: ctx.config.budget,
     }), 'Yönetici · yeni mesaj');
     return 'waiting';
   },

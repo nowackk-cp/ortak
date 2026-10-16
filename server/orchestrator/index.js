@@ -4,6 +4,7 @@ import path from 'node:path';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { getAgents } from '../limits.js';
+import { BUDGETS, DEFAULT_BUDGET, autoTeam, modelTier } from '../tiers.js';
 import * as git from '../git.js';
 import { makeContext } from './context.js';
 import { realCwd } from '../adapters/base.js';
@@ -91,8 +92,9 @@ export class Orchestrator {
       if (!model) model = (info.models.find((m) => m.default && !m.disabled) || info.models.find((m) => !m.disabled) || info.models[0])?.id;
       const locked = info.models.find((m) => m.id === model && m.disabled);
       if (locked) throw badRequest(`${info.name} · ${locked.label.replace(/ — kilitli$/, '')} bu hesapta kullanılamıyor${locked.note ? ` (${locked.note})` : ''}. Başka bir model seçin.`);
-      const modelLabel = info.models.find((m) => m.id === model)?.label || model || '';
-      return { agentId: info.id, model: model || null, role, name: info.name, modelLabel };
+      const picked = info.models.find((m) => m.id === model);
+      const modelLabel = picked?.label || model || '';
+      return { agentId: info.id, model: model || null, role, name: info.name, modelLabel, tier: picked?.tier || modelTier(info.id, picked) };
     };
     const list = (arr, role, needsEdit, max, what) => {
       if (!Array.isArray(arr) || !arr.length) throw badRequest(`En az bir ${what} seçin.`);
@@ -142,13 +144,28 @@ export class Orchestrator {
     } else if (mode === 'lead') {
       // The lead only reads; text-only agents (Gemini web) may be workers: Ortak edits for them.
       const boss = resolve(raw.lead, 'lead', false);
-      const workers = list(raw.workers, 'worker', false, MAX_LEAD_WORKERS, 'alt ajan');
+      const budget = raw.budget ?? DEFAULT_BUDGET;
+      if (!BUDGETS.includes(budget)) throw badRequest(`Geçersiz bütçe: ${budget}. Geçerli değerler: ${BUDGETS.join(', ')}.`);
+      // workers: 'auto' = every usable agent the budget allows (tiers.js), else an explicit list
+      const auto = raw.workers === 'auto';
+      let specs = raw.workers;
+      if (auto) {
+        specs = autoTeam([...agents.values()], { budget, lead: { agentId: boss.agentId, model: boss.model } });
+        if (!specs.length) {
+          throw badRequest(budget === 'free-only'
+            ? 'Kullanılabilir ücretsiz ajan yok. Ajanlar ve API\'ler penceresinden Groq, OpenRouter ya da Gemini gibi ücretsiz bir ajanı bağlayın veya bütçeyi değiştirin.'
+            : 'Ekip için kullanılabilir alt ajan yok. Ajanlar ve API\'ler penceresinden bir ajan bağlayın.');
+        }
+      }
+      const workers = list(specs, 'worker', false, MAX_LEAD_WORKERS, 'alt ajan');
       const steps = raw.steps == null ? 8 : Math.trunc(Number(raw.steps));
       if (!Number.isFinite(steps) || steps < 1 || steps > 12) throw badRequest('Adım sayısı 1 ile 12 arasında olmalı.');
       entries = [{ ...boss, lane: 'lead' }, ...workers];
       Object.assign(config, {
         lead: { agentId: boss.agentId, model: boss.model },
         workers: workers.map(({ agentId, model }) => ({ agentId, model })),
+        ...(auto ? { autoTeam: true } : {}),
+        budget,
         steps,
         permission,
       });
@@ -226,7 +243,7 @@ export class Orchestrator {
     if (v.surface !== 'chat') this.store.addRecent(v.cwd);
     this.#activate(run, (ctx) => MODES[v.mode].start(ctx), () => {
       for (const l of run.meta.lanes) {
-        this.store.append(run, { kind: 'lane', lane: l.lane, agentId: l.agentId, model: l.model, role: l.role, title: l.title });
+        this.store.append(run, { kind: 'lane', lane: l.lane, agentId: l.agentId, model: l.model, role: l.role, title: l.title, tier: l.tier });
       }
       this.store.append(run, { kind: 'user', text: v.shown, ...userFiles(v.files, images) });
     });
@@ -370,7 +387,7 @@ function buildLanes(entries) {
       counts.set(e.agentId, n);
       lane = n === 1 ? e.agentId : `${e.agentId}#${n}`;
     }
-    return { lane, agentId: e.agentId, model: e.model, role: e.role, title: e.modelLabel ? `${e.name} · ${e.modelLabel}` : e.name };
+    return { lane, agentId: e.agentId, model: e.model, role: e.role, tier: e.tier, title: e.modelLabel ? `${e.name} · ${e.modelLabel}` : e.name };
   });
   const seen = new Map();
   for (const l of lanes) {

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 process.env.ORTAK_DATA ||= path.join(os.tmpdir(), `ortak-test-data-${process.pid}`);
+process.env.ORTAK_AGENTS ||= 'yok'; // never probe the real CLIs (limits.js) from tests
 
 export async function makeRepo(files = { 'README.md': '# deneme\n' }) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'ortak-test-'));

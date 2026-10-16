@@ -13,6 +13,7 @@ import { realCwd } from './adapters/base.js';
 import { DEFAULTS, getSettings, updateSettings } from './settings.js';
 import { gateStats } from './gate.js';
 import { servedPath } from './attachments.js';
+import { BUDGETS, DEFAULT_BUDGET, autoTeam } from './tiers.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const WEB = path.join(ROOT, 'web');
@@ -194,6 +195,12 @@ async function api(req, res, url) {
   if (pathname === '/api/fs/check' && method === 'GET') return sendJson(res, 200, await fsCheck(searchParams.get('path')));
   if (pathname === '/api/fs/list' && method === 'GET') return sendJson(res, 200, await fsList(searchParams.get('path')));
   if (pathname === '/api/health' && method === 'GET') return sendJson(res, 200, { ok: true, port: PORT });
+  // The team lead mode would pick with `workers: 'auto'` (preview for the UI).
+  if (pathname === '/api/team/auto' && method === 'GET') {
+    const budget = BUDGETS.includes(searchParams.get('budget')) ? searchParams.get('budget') : DEFAULT_BUDGET;
+    const lead = searchParams.get('lead') ? { agentId: searchParams.get('lead'), model: searchParams.get('leadModel') || null } : null;
+    return sendJson(res, 200, { budget, workers: autoTeam(await getAgents({ refresh }), { budget, lead }) });
+  }
   if (pathname === '/api/settings') {
     if (method === 'GET') return sendJson(res, 200, { settings: getSettings(), defaults: DEFAULTS, gate: gateStats() });
     if (method === 'PUT') {
