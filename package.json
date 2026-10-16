@@ -1,0 +1,18 @@
+{
+  "name": "ortak",
+  "version": "0.1.0",
+  "description": "Claude Code, Codex ve Antigravity'yi tek yerden yöneten çoklu-ajan kodlama uygulaması",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "mock": "node server/index.js --mock",
+    "ac": "node scripts/launch.mjs",
+    "durdur": "node scripts/stop.mjs",
+    "kisayol": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-shortcuts.ps1",
+    "ikon": "node scripts/make-icon.mjs",
+    "araclar": "npm i --prefix tools --no-fund --no-audit @openai/codex"
+  }
+}

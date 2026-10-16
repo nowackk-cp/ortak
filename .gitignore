@@ -1,0 +1,20 @@
+node_modules/
+tools/
+*.log
+
+# Yerel veriler: API anahtarları (evren/groq/openrouter.json), Gemini oturumu, sohbet geçmişi, ayarlar
+data/
+
+# Gizli bilgiler ve yerel ayarlar
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+.claude/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
