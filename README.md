@@ -273,11 +273,23 @@ Listeye sahte bir **Test Ajanı** eklenir. Arayüzü ve modları kota harcamadan
 
 </details>
 
+<details>
+<summary><b>▸ Telefondan kullanmak istiyorum</b></summary>
+
+<br>
+
+Sol alttaki **telefon** simgesi → **Telefondan erişim: Açık** → telefonun kamerasıyla QR kodu okut (telefon aynı Wi-Fi'da olmalı).
+Açılan sayfayı **Ana ekrana ekle** ile uygulama gibi kullan. Evin dışından kullanmak için iki cihaza da ücretsiz [Tailscale](https://tailscale.com) kur.
+Ayrıntılar ve güvenlik duvarı ayarı: [docs/KULLANIM.md → Telefondan kullanma](docs/KULLANIM.md#telefondan-kullanma).
+
+</details>
+
 ---
 
 ## 🔒 Güvenlik ve gizlilik
 
 - 🏠 Sunucu yalnızca `127.0.0.1`'e bağlanır, başka sitelerden gelen istekleri reddeder.
+- 📱 **Telefondan erişim** kapalı gelir. Açarsan ayrı bir port ağa açılır ve her istekte rastgele bir anahtar (QR kod) ister; açıp kapatmak yalnızca bilgisayardan yapılır.
 - 🔑 Ortak ajanların giriş bilgilerini okumaz ve hiçbir yere göndermez. Girişleri ajanların kendi akışları yapar.
 - 🗂️ API anahtarları, Gemini oturumu ve sohbet geçmişi `data/` klasöründe durur. Bu klasör git'e hiç girmez.
 - ⚠️ **Tam yetki** ajanlara onaysız komut çalıştırma izni verir. Yalnızca güvendiğin klasörlerde kullan.

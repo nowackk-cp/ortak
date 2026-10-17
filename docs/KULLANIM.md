@@ -110,8 +110,45 @@ uygulama penceresinde açılır. Görev çubuğuna sabitlemek için ikona sağ t
 | Sunucu günlüğü | `data/server.log` |
 
 Elle çalıştırmak istersen: `npm start` ve tarayıcıda <http://127.0.0.1:4747>. Sunucu sadece bu
-bilgisayardan erişilebilir. Gerçek ajanları harcamadan arayüzü denemek için `npm run mock`
+bilgisayardan erişilebilir (telefondan erişimi açmadıkça, aşağıya bak). Gerçek ajanları harcamadan arayüzü denemek için `npm run mock`
 (listeye bir "Test Ajanı" ekler).
+
+## Telefondan kullanma
+
+Ortak bilgisayarında çalışırken telefonundan da kullanabilirsin: çalışma başlatırsın, ajanları
+izlersin, çalışırken mesaj yazarsın, proje klasörü seçersin, fotoğraf eklersin.
+
+1. Sol alttaki **telefon** simgesine bas → **Telefondan erişim: Açık**.
+2. Telefon bilgisayarla **aynı Wi-Fi**'da olsun; telefonun kamerasıyla penceredeki **QR kodu** okut.
+   QR okutamazsan penceredeki adresi (ör. `http://192.168.1.23:4748`) telefonun tarayıcısına yaz,
+   açılan sayfaya **anahtarı** (`XXXX-XXXX-XXXX-XXXX`) gir.
+3. Tarayıcı menüsünden **Ana ekrana ekle**: Ortak telefonda uygulama gibi açılır.
+
+Bağlanan telefonlar pencerede "Bağlanan cihazlar" altında görünür. **Yeni anahtar** bütün
+telefonların bağlantısını keser (yeniden QR okutman gerekir). Erişimi kapatmak, açmak ve anahtarı
+değiştirmek yalnızca bilgisayardan yapılır; Ortak telefondan kapatılamaz.
+
+**Bağlanamıyorsan:** Ortak telefon erişimini ilk açtığında Windows Güvenlik Duvarı "Node.js" için
+izin isteyebilir: **Özel ağlar** işaretliyken *İzin ver*. Wi-Fi ağın "Ortak (Public)" profildeyse
+Ayarlar → Ağ ve İnternet → Wi-Fi → ağın adı → **Özel ağ** yap. Pencereyi kaçırdıysan yönetici
+PowerShell'de:
+
+```powershell
+New-NetFirewallRule -DisplayName "Ortak telefon" -Direction Inbound -Protocol TCP -LocalPort 4748 -Action Allow -Profile Private
+```
+
+Misafir ağları ve bazı modemler cihazların birbirini görmesini engeller; telefonu ana ağa bağla.
+
+**Evin dışından:** bilgisayara ve telefona ücretsiz [Tailscale](https://tailscale.com) kur, ikisinde
+aynı hesapla gir. Pencerede "Tailscale — her yerden" adresi çıkar; telefon mobil veride de bağlanır
+ve trafik şifreli gider. Ortak'ı internete doğrudan açma (modemde port yönlendirme yapma).
+
+**Güvenlik:** Telefon erişimi ayrı bir kapıdan (port 4748, `ORTAK_REMOTE_PORT` ile değişir) çalışır
+ve her istekte anahtar ister; anahtar 80 bitlik rastgele bir değerdir, telefonda yalnızca o tarayıcının
+çerezinde (HttpOnly) durur. 10 yanlış denemeden sonra o adres 10 dakika bekletilir. Bilgisayardaki
+`127.0.0.1:4747` her zamanki gibi anahtarsız çalışır. Ev Wi-Fi'ında trafik şifresizdir; QR kodu ve
+anahtarı kimseyle paylaşma — bu adresi açan kişi bilgisayarında ajan çalıştırabilir (Tam yetki dahil).
+Ayar `data/remote.json` dosyasında durur.
 
 ## Performans
 
@@ -168,6 +205,7 @@ bir işlem görülürse tur durdurulur — ama işlem engellenmez, sadece sonrad
   Antigravity'ye, açık olan uygulamanın kendi yerel dil sunucusu üzerinden bağlanır. Copilot'un hesap/kota/model
   bilgisi Copilot'un kendi SDK sunucu modundan (`copilot --headless`) gelir; girişleri ajanların kendi akışları yapar.
 - Sunucu sadece `127.0.0.1`'e bağlanır; başka sitelerden gelen istekleri (Host/Origin kontrolü) reddeder.
+  Telefondan erişim açılırsa ayrı bir port ağa açılır ve her istekte anahtar ister (bkz. *Telefondan kullanma*).
 - "Tam yetki" ajanlara onaysız ve sandbox'sız komut çalıştırma izni verir; sadece güvendiğin klasörlerde kullan.
 
 ## Bilinen sınırlamalar
@@ -193,16 +231,17 @@ bir işlem görülürse tur durdurulur — ama işlem engellenmez, sadece sonrad
 
 ```
 server/index.js            HTTP + SSE sunucu
+server/remote.js           telefondan erişim: anahtarlı ikinci kapı (port 4748), giriş sayfası, ağ adresleri
 server/orchestrator/       Sohbet, Yönetici, Grup, Beyin Fırtınası, Paralel, Takım modları (prompts.js: ajanlara giden şablonlar,
                            CHAT_SURFACE: Sohbet arayüzünün talimatı;
                            textcoder.js: dosyaya erişemeyen ajanlar için Ortak'ın oku/düzenle "elleri")
 server/adapters/           claude.js, codex.js, antigravity.js, geminiweb.js (+ cdp.js), opencode.js + kilo.js (opencode-core.js),
                            copilot.js, junie.js (+ acp.js), evren.js (HTTP API), mock.js — yeni ajan = yeni adaptör
-web/                       arayüz (derleme adımı yok)
+web/                       arayüz (derleme adımı yok; js/phone.js: Telefondan aç penceresi, js/qr.js: QR kod üretici)
 scripts/try-adapter.mjs    tek bir adaptörü elle deneme
 Ortak.vbs                  tek tık başlatıcı (scripts/launch.mjs'i pencere açmadan çalıştırır)
 scripts/launch.mjs         sunucu kapalıysa arka planda başlatır, uygulama penceresini açar
-scripts/install-shortcuts.ps1, scripts/stop.mjs, scripts/make-icon.mjs (assets/ortak.ico)
+scripts/install-shortcuts.ps1, scripts/stop.mjs, scripts/make-icon.mjs (assets/ortak.ico, web/icons/*.png)
 ```
 
 Ayrıntılı mimari ve sözleşme: [docs/CONTRACT.md](CONTRACT.md)

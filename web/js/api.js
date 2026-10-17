@@ -50,6 +50,11 @@ export async function api(path, { method = 'GET', body, quiet = false, signal } 
   if (text) {
     try { data = JSON.parse(text); } catch { data = null; }
   }
+  // phone access: the key cookie is gone (a new key was made on the computer) → sign-in page
+  if (res.status === 401 && data?.login) {
+    location.reload();
+    return new Promise(() => {});
+  }
   if (!res.ok) {
     const e = new Error((data && typeof data.error === 'string' && data.error) || `İstek başarısız (HTTP ${res.status})`);
     e.status = res.status;

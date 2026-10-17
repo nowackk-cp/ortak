@@ -1,5 +1,6 @@
 // Renders the Ortak logo (same as the favicon in web/index.html: orange rounded square with two
-// white rings) into assets/ortak.ico at several sizes. Zero dependencies: PNG-in-ICO.
+// white rings) into assets/ortak.ico at several sizes, and the phone's home-screen icons
+// (web/icons/*.png, see web/manifest.webmanifest). Zero dependencies: PNG-in-ICO.
 //   node scripts/make-icon.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,7 +30,8 @@ function inRing(x, y) {
   return RINGS.some(([cx, cy]) => Math.abs(Math.hypot(x - cx, y - cy) - R) <= HALF_STROKE);
 }
 
-function render(size) {
+/** `full`: no transparent corners (iOS rounds the home-screen icon itself). */
+function render(size, { full = false } = {}) {
   const px = Buffer.alloc(size * size * 4);
   const scale = 32 / size;
   for (let y = 0; y < size; y++) {
@@ -39,7 +41,7 @@ function render(size) {
         for (let sx = 0; sx < SS; sx++) {
           const ux = (x + (sx + 0.5) / SS) * scale;
           const uy = (y + (sy + 0.5) / SS) * scale;
-          if (!inRoundedRect(ux, uy)) continue;
+          if (!full && !inRoundedRect(ux, uy)) continue;
           const c = inRing(ux, uy) ? FG : BG;
           r += c[0]; g += c[1]; b += c[2]; a += 1;
         }
@@ -106,3 +108,11 @@ const entries = images.map(({ size, data }) => {
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, Buffer.concat([header, ...entries, ...images.map((i) => i.data)]));
 console.log(`${OUT} (${SIZES.join(', ')} px)`);
+
+// phone: home-screen icons
+const ICONS = path.join(ROOT, 'web', 'icons');
+fs.mkdirSync(ICONS, { recursive: true });
+for (const [name, size, full] of [['icon-192.png', 192, false], ['icon-512.png', 512, false], ['apple-touch-icon.png', 180, true]]) {
+  fs.writeFileSync(path.join(ICONS, name), png(size, render(size, { full })));
+}
+console.log(`${ICONS} (192, 512, apple-touch-icon 180 px)`);

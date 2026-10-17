@@ -238,6 +238,16 @@ All JSON. Errors → `{ error: "Türkçe mesaj" }` with 4xx/5xx.
 | `GET  /api/fs/check`             | `?path=` | `{ exists, isDir, isGit, branch? }` |
 | `GET  /api/recent`               | | `{ cwds: [string] }` recently used project folders |
 | `GET/PUT /api/settings`          | partial settings | `{ settings, defaults, gate }` performance settings (server/settings.js), saved in data/settings.json |
+| `GET  /api/remote`               | | phone access (server/remote.js): `{ enabled, listening, port, error, urls: [{ url, kind: 'lan'\|'tailscale'\|'other', label }], viaPhone }`; from the computer also `key`, `links: [{ …url, link }]` (QR: `url/?k=KEY`), `devices: [{ name, ip, at }]` |
+| `PUT  /api/remote`               | `{ enabled }` | same; computer only (403 from the phone) |
+| `POST /api/remote/rotate`        | | same, with a new key (every phone has to sign in again); computer only |
+
+**Phone listener** (only while enabled; `0.0.0.0:4748`, `ORTAK_REMOTE_PORT`): every request needs the
+key — `GET …?k=KEY` (the QR link) or `POST /telefon/giris { key }` sets the HttpOnly `ortak_key`
+cookie (SameSite=Lax); without it pages get a sign-in page and `/api/*` answers `401 { error, login: true }`
+(the UI reloads into the sign-in page). 10 wrong keys per address in 10 minutes → 429. Requests with
+the key go to the same handler with `viaPhone`: no Host check (reached by IP / Tailscale name), Origin
+must be the request's own host, `POST /api/shutdown` and the remote settings are refused.
 
 Static: `/` → `web/index.html`, other paths → files under `web/`.
 

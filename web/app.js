@@ -10,6 +10,7 @@ import { renderRuns, renderAgents, renderCwdStatus, renderRecentMenu } from './j
 import { MODES, RUN_STATUS, SURFACES, modeInfo, runSurface } from './js/modes.js';
 import { openFolderPicker } from './js/folderpicker.js';
 import { openPerfDialog } from './js/perf.js';
+import { openPhoneDialog } from './js/phone.js';
 import { initAttach, attached, clearAttachments } from './js/attach.js';
 
 const $ = (id) => document.getElementById(id);
@@ -701,6 +702,8 @@ function bind() {
   $('theme-btn').addEventListener('click', toggleTheme);
   $('perf-btn').addEventListener('click', () => openPerfDialog({ onChange: (s) => { state.settings = s; } }));
   $('perf-btn').replaceChildren(icon('gauge'));
+  $('phone-btn').addEventListener('click', openPhoneDialog);
+  $('phone-btn').replaceChildren(icon('phone'));
   mqLight.addEventListener('change', renderThemeBtn);
 
   $('menu-btn').addEventListener('click', openDrawer);

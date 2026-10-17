@@ -1734,3 +1734,44 @@ details[open] > summary > .am-chev, details[open] > summary > .prov-chev { trans
 .prov-name { font-weight: 600; }
 .prov-n { color: var(--text-muted); }
 .prov > .mdl-list { padding: 0 6px 6px 26px; }
+
+/* "Telefondan aç" dialog */
+.phone-modal { width: min(640px, 100%); max-height: min(760px, 92vh); }
+.phone-body { flex: 1; overflow-y: auto; padding: 4px 16px 14px; }
+.icon-btn.sm { width: 26px; height: 26px; }
+.icon-btn.sm .ic { width: 14px; height: 14px; }
+.ph-on { display: flex; flex-direction: column; gap: 14px; padding-top: 14px; }
+.ph-main { display: flex; gap: 18px; align-items: flex-start; }
+.ph-qr { flex: none; width: 196px; height: 196px; padding: 0; border: 1px solid var(--border-soft); border-radius: 12px; background: #fff; overflow: hidden; }
+.ph-qr svg { display: block; width: 100%; height: 100%; }
+.ph-info { display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1; }
+.ph-steps { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; color: var(--text); }
+.ph-step { display: flex; gap: 8px; align-items: flex-start; line-height: 1.45; }
+.ph-n { display: inline-grid; place-items: center; flex: none; width: 19px; height: 19px; margin-top: 1px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; }
+.ph-field { display: flex; flex-direction: column; gap: 3px; }
+.ph-label { font-size: 11.5px; font-weight: 600; color: var(--text-faint); }
+.ph-val { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.ph-val code { padding: 3px 7px; border-radius: 6px; background: var(--bg-soft); font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.ph-key { font-size: 14px !important; font-weight: 600; letter-spacing: 0.06em; }
+.ph-hint { font-size: 12px; line-height: 1.45; color: var(--text-muted); }
+.ph-addrs { display: flex; flex-direction: column; gap: 5px; }
+.ph-seg { align-self: flex-start; }
+.ph-seg .seg-btn { font-size: 12px; }
+.ph-devices { display: flex; flex-direction: column; gap: 4px; }
+.ph-dev { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.ph-dev .ic { width: 14px; height: 14px; color: var(--green); }
+.ph-dev-m { margin-left: auto; font-size: 12px; color: var(--text-faint); }
+.ph-help { border-top: 1px solid var(--border-soft); padding-top: 8px; font-size: 12.5px; color: var(--text-muted); }
+.ph-help > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; font-weight: 500; }
+.ph-help > summary::-webkit-details-marker { display: none; }
+.ph-help[open] .adv-chev { transform: rotate(90deg); }
+.ph-help ul { margin: 8px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45; }
+.ph-warn { display: flex; gap: 8px; align-items: flex-start; padding: 9px 12px; border: 1px solid var(--amber-soft); border-radius: 10px; background: var(--amber-soft); color: var(--amber); font-size: 12.5px; line-height: 1.45; }
+.ph-warn .ic { flex: none; margin-top: 1px; width: 15px; height: 15px; }
+.ph-phone { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; padding: 14px 0 4px; }
+.ph-big { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.ph-big .ic { color: var(--green); }
+@media (max-width: 600px) {
+  .ph-main { flex-direction: column; align-items: center; }
+  .ph-info { width: 100%; }
+}

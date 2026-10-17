@@ -1,5 +1,6 @@
-﻿// Ortak HTTP server: static web UI + REST + SSE. Binds to 127.0.0.1 only.
-//   node server/index.js [--mock]        (env: ORTAK_PORT, ORTAK_DATA, ORTAK_AGENTS)
+﻿// Ortak HTTP server: static web UI + REST + SSE. Binds to 127.0.0.1; phone access (remote.js) adds
+// a second, key-protected listener on the network only when turned on from the computer.
+//   node server/index.js [--mock]        (env: ORTAK_PORT, ORTAK_DATA, ORTAK_AGENTS, ORTAK_REMOTE_PORT)
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -15,6 +16,8 @@ import { gateStats } from './gate.js';
 import { servedPath } from './attachments.js';
 import { BUDGETS, DEFAULT_BUDGET, autoTeam } from './tiers.js';
 import { buildCatalog } from './catalog.js';
+import { Remote } from './remote.js';
+import { qrText } from '../web/js/qr.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const WEB = path.join(ROOT, 'web');
@@ -185,10 +188,27 @@ async function fsList(p) {
 
 // ---- API --------------------------------------------------------------------------------------
 
-async function api(req, res, url) {
+async function api(req, res, url, { remote: viaPhone = false } = {}) {
   const { pathname, searchParams } = url;
   const method = req.method;
   const refresh = searchParams.get('refresh') === '1';
+
+  // Phone access: its state for the UI; turning it on/off and a new key only from the computer.
+  if (pathname === '/api/remote' || pathname === '/api/remote/rotate') {
+    if (method === 'GET' && pathname === '/api/remote') return sendJson(res, 200, { ...remote.status({ local: !viaPhone }), viaPhone });
+    if (viaPhone) return sendError(res, 403, 'Telefondan erişim ayarları yalnızca bilgisayardan değiştirilebilir.');
+    if (method === 'PUT' && pathname === '/api/remote') {
+      const body = await readJson(req);
+      if (typeof body.enabled !== 'boolean') throw new HttpError(400, '`enabled` true ya da false olmalı.');
+      await remote.setEnabled(body.enabled);
+      return sendJson(res, 200, { ...remote.status({ local: true }), viaPhone });
+    }
+    if (method === 'POST' && pathname === '/api/remote/rotate') {
+      remote.rotate();
+      return sendJson(res, 200, { ...remote.status({ local: true }), viaPhone });
+    }
+    return sendError(res, 405, 'İzin verilmeyen yöntem.');
+  }
 
   if (pathname === '/api/agents' && method === 'GET') return sendJson(res, 200, await getAgents({ refresh }));
   if (pathname === '/api/limits' && method === 'GET') return sendJson(res, 200, await getLimits({ refresh }));
@@ -215,6 +235,8 @@ async function api(req, res, url) {
 
   // Graceful stop (scripts/stop.mjs): cancels running agents, flushes runs, exits.
   if (pathname === '/api/shutdown' && method === 'POST') {
+    // from the phone there would be no way to start it again
+    if (viaPhone) return sendError(res, 403, 'Ortak telefondan kapatılamaz.');
     sendJson(res, 200, { ok: true });
     setTimeout(() => shutdown('api'), 100);
     return;
@@ -327,16 +349,19 @@ async function serveStatic(req, res, pathname) {
 
 // ---- request entry ----------------------------------------------------------------------------
 
-async function handle(req, res) {
-  // DNS-rebinding guard: only our own host:port is accepted.
+/** `remote`: the request came through the phone listener, which has already checked its key. */
+async function handle(req, res, { remote: viaPhone = false } = {}) {
+  // DNS-rebinding guard: only our own host:port is accepted (the phone listener needs its key
+  // instead, and a rebound page never has the phone's cookie).
   const host = String(req.headers.host || '').toLowerCase();
-  if (!ALLOWED_HOSTS.has(host)) {
+  if (!viaPhone && !ALLOWED_HOSTS.has(host)) {
     return sendError(res, 403, `Geçersiz Host başlığı. Ortak'a yalnızca http://127.0.0.1:${PORT} adresinden erişilebilir.`);
   }
   const method = req.method;
   if (method !== 'GET' && method !== 'HEAD') {
     const origin = req.headers.origin;
-    if (origin !== undefined && !ALLOWED_ORIGINS.has(String(origin).toLowerCase())) {
+    const own = viaPhone ? new Set([`http://${host}`, `https://${host}`]) : ALLOWED_ORIGINS;
+    if (origin !== undefined && !own.has(String(origin).toLowerCase())) {
       return sendError(res, 403, 'Farklı bir kaynaktan (Origin) gelen istek reddedildi.');
     }
     // JSON forces a CORS preflight for cross-site pages. A body-less request (cancel/DELETE from
@@ -351,7 +376,7 @@ async function handle(req, res) {
   let url;
   try { url = new URL(req.url, `http://${host}`); } catch { return sendError(res, 400, 'Geçersiz adres.'); }
 
-  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return api(req, res, url);
+  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return api(req, res, url, { remote: viaPhone });
   if (method !== 'GET' && method !== 'HEAD') return sendError(res, 405, 'İzin verilmeyen yöntem.');
   return serveStatic(req, res, url.pathname);
 }
@@ -360,6 +385,8 @@ async function handle(req, res) {
 
 await store.init();
 orch.recover();
+
+const remote = new Remote({ dataDir: DATA, handle: (req, res) => handle(req, res, { remote: true }) });
 
 const server = http.createServer((req, res) => {
   handle(req, res).catch((err) => {
@@ -377,10 +404,13 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, BIND, () => {
+server.listen(PORT, BIND, async () => {
   const mock = process.argv.includes('--mock') || process.env.ORTAK_MOCK === '1';
   console.log(`Ortak çalışıyor: http://127.0.0.1:${PORT}${mock ? '  (test ajanı açık)' : ''}`);
   console.log(`Veri klasörü: ${DATA}`);
+  await remote.start();
+  const phone = remote.listening && remote.status({ local: true }).links[0];
+  if (phone) console.log(`Telefonun kamerasıyla okut:\n${qrText(phone.link)}`);
 });
 
 let stopping = false;
@@ -390,6 +420,7 @@ async function shutdown(signal) {
   console.log(`\n${signal} alındı, kapatılıyor…`);
   server.close();
   try {
+    await remote.stop();
     await orch.shutdown();
     await store.flushAll();
   } catch (err) {

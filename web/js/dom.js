@@ -59,6 +59,7 @@ const ICONS = {
   send: '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
   play: '<path d="M8 5.5v13l10.5-6.5z"/>',
   up: '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
+  phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V5.5A1.5 1.5 0 0 0 13.5 4h-8A1.5 1.5 0 0 0 4 5.5v8A1.5 1.5 0 0 0 5.5 15H9"/>',
   check: '<path d="M5 12.5 9.5 17 19 7"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
