@@ -271,12 +271,13 @@ const READ_RULES =
   '- Dosyalar mesaja ek dosya (.txt) olarak da gelebilir: başlığında "ek dosya olarak yüklendi" yazan dosyanın içeriği o ektedir; ' +
   'SEARCH kısmını ekteki metinden birebir kopyala.\n';
 
-export function textCoderTask({ goal, task, listing, attached, readOnly, leadName }) {
+export function textCoderTask({ goal, task, listing, attached, outlines = [], readOnly, leadName }) {
   const list = listing.files.join('\n') + (listing.more ? `\n… ve ${listing.more} dosya daha` : '');
   return `${leadName ? `Yöneticin (${leadName}) sana bir görev verdi.\n\n` : ''}` +
     `Genel hedef (kullanıcının isteği):\n${goal}\n\nSenin görevin:\n${task}\n\n` +
     `Projedeki dosyalar:\n\`\`\`\n${list || '(boş)'}\n\`\`\`\n\n` +
     (attached.length ? `İlgili dosyalar:\n\n${fileBlocks(attached)}\n\n` : '') +
+    (outlines.length ? `Bu dosyaların kullandığı dosyaların ana hatları (gerekirse ilgili satırları oku):\n\n${outlineBlocks(outlines)}\n\n` : '') +
     (readOnly
       ? 'Bu çalışma salt okunur: dosyaları değiştiremezsin. Gerekirse READ ile dosya iste, sonra görevi cevapla (analiz, öneri, inceleme).\n\n'
       : `${EDIT_FORMAT}\n\n`) +
@@ -293,7 +294,15 @@ function grepBlocks(found = []) {
 function ranBlocks(ran = []) {
   return ran.map((r) => (r.refused
     ? `### RUN ${r.command}\n(çalıştırılmadı: ${r.refused})`
-    : `### RUN ${r.command}\n${r.timedOut ? `Zaman aşımı: ${COMMAND_TIMEOUT_MS / 1000} sn sonra durduruldu.` : `Çıkış kodu: ${r.code}`}\n\`\`\`\n${r.output || '(çıktı yok)'}\n\`\`\``)).join('\n\n');
+    : `### RUN ${r.command}${r.auto ? ' (değişikliklerinden sonra Ortak kendiliğinden çalıştırdı — başarısız)' : ''}\n${r.timedOut ? `Zaman aşımı: ${COMMAND_TIMEOUT_MS / 1000} sn sonra durduruldu.` : `Çıkış kodu: ${r.code}`}\n\`\`\`\n${r.output || '(çıktı yok)'}\n\`\`\``)).join('\n\n');
+}
+
+/** Files sent with a message because it names them (textcoder.js prefetch); '' when none. */
+export function prefetched({ attached = [], outlines = [] }) {
+  if (!attached.length && !outlines.length) return '';
+  return '\n\n[Ortak] Mesajda adı geçen dosyalar (önceden gönderildi; yeniden READ etme):\n\n' +
+    (attached.length ? `${fileBlocks(attached)}\n\n` : '') +
+    (outlines.length ? `Bunların kullandığı dosyaların ana hatları:\n\n${outlineBlocks(outlines)}` : '');
 }
 
 /** `outlines` = [{ path, text, error? }] (textcoder.js outlineFiles) */
@@ -309,7 +318,7 @@ export function textCoderFollow({ files, ran = [], found = [], outlines = [], re
   if (found.length) parts.push(`Arama sonuçları:\n\n${grepBlocks(found)}`);
   if (outlines.length) parts.push(`Ana hatlar:\n\n${outlineBlocks(outlines)}`);
   if (results.length) {
-    parts.push('Değişikliklerinin sonucu:\n' + results.map((r) => `- ${r.path}: ${r.ok ? (r.created ? 'oluşturuldu' : 'uygulandı') : `UYGULANAMADI — ${r.error}`}`).join('\n'));
+    parts.push('Değişikliklerinin sonucu:\n' + results.map((r) => `- ${r.path}: ${r.ok ? (r.created ? 'oluşturuldu' : r.near ? 'uygulandı (SEARCH birebir değildi, en yakın yere uygulandı; sonucu kontrol et)' : 'uygulandı') : `UYGULANAMADI — ${r.error}`}`).join('\n'));
   }
   if (current.length) parts.push(`Uygulanamayan blokların dosyalarının güncel hâli:\n\n${fileBlocks(current)}`);
   if (files.length) parts.push(`İstediğin dosyalar:\n\n${fileBlocks(files)}`);
@@ -356,7 +365,7 @@ export function textChatFollow({ files, dirs, ran = [], found = [], outlines = [
   if (found.length) parts.push(grepBlocks(found));
   if (outlines.length) parts.push(outlineBlocks(outlines));
   if (results.length) {
-    parts.push('Değişiklikler:\n' + results.map((r) => `- ${r.path}: ${r.ok ? (r.created ? 'oluşturuldu' : 'uygulandı') : `UYGULANAMADI — ${r.error}`}`).join('\n'));
+    parts.push('Değişiklikler:\n' + results.map((r) => `- ${r.path}: ${r.ok ? (r.created ? 'oluşturuldu' : r.near ? 'uygulandı (SEARCH birebir değildi, en yakın yere uygulandı; sonucu kontrol et)' : 'uygulandı') : `UYGULANAMADI — ${r.error}`}`).join('\n'));
   }
   if (current.length) parts.push(`Uygulanamayan blokların dosyalarının güncel hâli:\n\n${fileBlocks(current)}`);
   for (const d of dirs) {
@@ -397,12 +406,13 @@ export function nativeCoderSystem(permission) {
   return `Bir yazılım ekibinde çalışansın. ${nativeToolRules(permission)}\n${LANG}`;
 }
 
-export function nativeCoderTask({ goal, task, listing, attached, readOnly, leadName }) {
+export function nativeCoderTask({ goal, task, listing, attached, outlines = [], readOnly, leadName }) {
   const list = listing.files.join('\n') + (listing.more ? `\n… ve ${listing.more} dosya daha` : '');
   return `${leadName ? `Yöneticin (${leadName}) sana bir görev verdi.\n\n` : ''}` +
     `Genel hedef (kullanıcının isteği):\n${goal}\n\nSenin görevin:\n${task}\n\n` +
     `Projedeki dosyalar:\n\`\`\`\n${list || '(boş)'}\n\`\`\`\n\n` +
     (attached.length ? `İlgili dosyalar:\n\n${fileBlocks(attached)}\n\n` : '') +
+    (outlines.length ? `Bu dosyaların kullandığı dosyaların ana hatları (gerekirse ilgili satırları oku):\n\n${outlineBlocks(outlines)}\n\n` : '') +
     (readOnly
       ? 'Bu çalışma salt okunur: dosyaları değiştiremezsin. Gerekirse dosyaları okuyup görevi cevapla (analiz, öneri, inceleme). '
       : 'Değişiklikleri edit_file / write_file araçlarıyla doğrudan yap. ') +

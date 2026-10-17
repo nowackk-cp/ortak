@@ -121,7 +121,7 @@ Each adapter module `export default` an object:
 | `system`     | string \| undefined                    | extra instructions appended to the agent's system prompt (or prepended to prompt if unsupported) |
 | `signal`     | AbortSignal                            | abort => kill the process tree, reject with `AbortError` |
 | `onEvent`    | (AdapterEvent) => void                 | stream of normalized events |
-| `tools`      | `{ defs, exec }` | undefined          | `capabilities.tools` only: OpenAI-style function `defs`; for each call the model makes the adapter awaits `exec(name, args)` → result text, sends it back and repeats until the model answers in text (adapters/openai-chat.js). The orchestrator (textcoder.js) decides what the tools do. |
+| `tools`      | `{ defs, exec, parallel? }` | undefined | `capabilities.tools` only: OpenAI-style function `defs`; for each call the model makes the adapter awaits `exec(name, args)` → result text, sends it back and repeats until the model answers in text (adapters/openai-chat.js). Consecutive calls whose names are in the `parallel` Set (read-only tools) may run at once; results keep the model's order. The orchestrator (textcoder.js) decides what the tools do. |
 | `uploads`    | `[{ name, mime, path, fallback }]` \| undefined | `capabilities.uploads` only: project files Ortak read for the agent (textcoder.js `Uploader`), to attach to the message instead of putting their text in it. If the attachments can't be added, the adapter appends each `fallback` (the file as message text) to the prompt — never fails the turn for it. |
 
 Permission mapping (adapters must implement it as faithfully as the CLI allows):

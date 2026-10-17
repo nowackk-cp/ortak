@@ -7,6 +7,8 @@ const LIGHT = {
   maxConcurrent: 1,
   lowPriority: true,
   geminiIdleMinutes: 5,
+  geminiTabs: 1,
+  autoTest: true,
   antigravityAutoStart: true,
   antigravityIdleMinutes: 15,
   limitsRefreshMinutes: 15,
@@ -32,6 +34,18 @@ const FIELDS = [
     label: 'Gemini penceresini boşta kalınca kapat',
     hint: 'Ortak’ın Gemini penceresi bu süre kullanılmazsa kapanır; sonraki turda simge durumunda yeniden açılır.',
     options: [0, 5, 10, 30, 60].map((v) => [v, minutes(v)]),
+  },
+  {
+    key: 'geminiTabs',
+    label: 'Aynı anda çalışan Gemini',
+    hint: 'Gemini web ajanları kendi sekmelerinde aynı anda çalışabilir (ör. yöneticinin iki Gemini alt ajanı). 1 seçersen sırayla çalışırlar.',
+    options: [1, 2, 3, 4].map((v) => [v, String(v)]),
+  },
+  {
+    key: 'autoTest',
+    label: 'Değişiklikten sonra testleri kendiliğinden çalıştır',
+    hint: 'Gemini web ve API ajanlarının değişikliklerini uyguladıktan sonra Ortak projenin testini (npm test, pytest, go test…) hemen çalıştırır; hata varsa aynı mesajda ajana gönderir. Ajanın ayrıca test istemesini beklemez.',
+    type: 'bool',
   },
   {
     key: 'antigravityAutoStart',

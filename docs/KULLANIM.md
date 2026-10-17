@@ -51,6 +51,16 @@ Bu modellerin diğer araçları:
 | `OUTLINE: yol` | Dosyanın ana hattını gönderir: fonksiyonlar, sınıflar, CSS seçicileri, Markdown başlıkları ve satır numaraları (klasör verilirse içindeki her dosyanın kısa ana hattı). Model büyük dosyayı baştan sona okumak yerine yerini bulup yalnızca gereken satırları ister. |
 | **Geri al** | Ortak'ın bir turda yaptığı dosya değişiklikleri sohbette "N dosya değişti — Geri al" çubuğu olarak görünür. Geri al, dosyaları o turdan önceki hâline döndürür (yeni oluşturulanları siler). Sonradan değişen bir dosyanın üzerine yazmaz, onu atladığını söyler. |
 
+**Ortak'ın ellerini hızlandıran şeyler.** En pahalı şey tur sayısı (Gemini web'de her tur 10–60 sn), o yüzden:
+- **Dosyalar baştan gider.** Görev metninde adı geçen dosyalar (ve yöneticinin `files` listesi) ilk mesajla birlikte gönderilir; bu dosyaların import ettiği dosyaların ana hatları da eklenir. Sohbette de mesajında adı geçen dosyalar mesajla gider. Model önce `READ:` isteyip bir tur beklemez.
+- **Değişiklik blokları esnek uygulanır.** SEARCH kısmı birebir değilse Ortak sırayla şunları dener: satır sonu boşlukları yok sayma, girinti ve boşluk farklarını yok sayma (yeni metin dosyanın girintisine uyarlanır), en az 4 satırlık blokta satırlarının %80'i tutan tek bir yer. Yaklaşık eşleşmede kartta "yaklaşık eşleşme" yazar ve modele sonucu kontrol etmesi söylenir; birden çok aday varsa uygulanmaz.
+- **Testler kendiliğinden çalışır.** Değişiklik uygulandıysa ve model kendisi komut istemediyse Ortak projenin testini (`npm test` / `pnpm test` / `yarn test`, `pytest`, `go test ./...`, `cargo test`) hemen çalıştırır. Test geçerse görev ek tur olmadan biter (rapora "geçti" notu düşer); kalırsa çıktısı aynı mesajla modele gider. Performans ayarından kapatılabilir.
+- **Gemini aynı sohbette sayfayı yeniden yüklemez.** Görevin sonraki turu aynı sekmede aynı sohbetteyse sayfa yeniden açılmaz ve model menüsü yeniden seçilmez. Birden çok Gemini turu kendi sekmelerinde aynı anda çalışır (ayar: Aynı anda çalışan Gemini).
+- **Arama hızlı.** Bilgisayarda ripgrep varsa (VS Code'un içindeki kopya da olur) GREP onunla yapılır; yoksa dosyalar paralel okunur. Dosya listesi birkaç saniye önbellekte tutulur.
+- **İlk mesaj kısa.** 150'den fazla dosyalı projelerde dosya listesi katlanır: büyük klasörler tek satırda görünür (`src/components/ (120 dosya: … — LIST ile aç)`).
+- **Komut çıktısı kırpılır.** Başarılı bir komutun yalnızca başı ve sonu gider (3.000 karakter); başarısız bir komutun başı, kesilen kısımdaki hata satırları ve sonu gider.
+- **API modellerinde okuma araçları paralel çalışır.** Model tek adımda birkaç `read_file` / `grep` / `outline` isterse hepsi aynı anda çalışır.
+
 **Gemini web'e dosyalar ek olarak gider.** Gemini web / 4 Argon `READ:` ile bir dosya istediğinde (ya da yönetici bir göreve dosya eklediğinde) Ortak dosyanın içeriğini artık sohbete yazmaz: dosyayı `.txt` eki olarak mesaja yükler, mesaja yalnızca "ek dosya olarak yüklendi" notu düşer. Böylece sohbet binlerce satırlık metinle dolmaz ve uzun mesajların yazılmasını beklemek gerekmez. Ayrıntılar:
 - Küçük dosyalar (1.500 karakterden az) yine mesajın içinde gider.
 - Bir mesajda en fazla 8 ek olur; daha fazla dosya istenirse kalanlar tek bir `ortak-dosyalar-N.txt` paketinde birleşir.
@@ -114,6 +124,8 @@ bilgisayardan erişilebilir. Gerçek ajanları harcamadan arayüzü denemek içi
 | Aynı anda çalışan ajan | 2 | Claude Code, Codex, OpenCode, Kilo, Copilot ve Junie her tur için ayrı bir program başlatır; fazlası sıraya girer ("Sırada" yazar). |
 | Düşük öncelik | açık | Ajanlar ve Ortak'ın açtığı pencereler işlemciyi oyun, tarayıcı gibi programlara bırakır. |
 | Gemini penceresini boşta kapat | 10 dk | Sonraki turda simge durumunda yeniden açılır. |
+| Aynı anda çalışan Gemini | 2 | Gemini web turları kendi sekmelerinde aynı anda çalışır (ör. yöneticinin iki Gemini alt ajanı). 1 = sırayla. |
+| Değişiklikten sonra testleri çalıştır | açık | Ortak, Gemini web / API ajanlarının değişikliklerini uyguladıktan sonra projenin testini kendisi çalıştırır. |
 | Antigravity'yi gerektiğinde aç | açık | Antigravity'yi kapalı tutabilirsin; ihtiyaç olunca Ortak açar. |
 | Ortak'ın açtığı Antigravity'yi boşta kapat | kapalı | Sadece Ortak'ın açtığı örneği, normal şekilde kapatır. |
 | Limitleri otomatik yenile | 5 dk | Pencere arka plandayken hiç yenilenmez. |

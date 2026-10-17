@@ -24,8 +24,11 @@
 // Agents that take attachments (capabilities.uploads: Gemini web) get the files they read as .txt
 // attachments instead of message text (Uploader below); unchanged files aren't sent twice.
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { which } from '../adapters/base.js';
 import { ATT_ROOT } from '../attachments.js';
 import { outlineLang, outlineText } from './outline.js';
 import * as git from '../git.js';
@@ -33,19 +36,41 @@ import * as P from './prompts.js';
 import { clip } from '../util.js';
 import { COMMAND_TIMEOUT_MS, policyOf, runCommand, shell } from '../commands.js';
 import * as checkpoints from '../checkpoints.js';
+import { getSettings } from '../settings.js';
 
 const MAX_ROUNDS = 7;          // agent turns per task (reads, commands, fix-ups)
 const READ_EACH_MAX = 120_000; // chars per file sent to the agent
 const READ_TOTAL_MAX = 300_000;
 const READ_SUMMARY_LINES = 400; // read_file without a range on a longer file: outline + head
 const READ_SUMMARY_HEAD = 150;
+const READ_TOOLS = new Set(['list_dir', 'read_file', 'grep', 'outline']); // safe to run at once
 const LISTING_MAX = 400;
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'data', 'tools', 'dist', 'build', '.next', 'coverage', '__pycache__', '.venv', 'venv']);
 
+// The file list is asked for by every LIST/GREP/OUTLINE: kept for a few seconds, dropped when
+// Ortak writes a file (a new file must show up at once).
+const filesCache = new Map(); // cwd → { files, git, at }
+const FILES_CACHE_MS = 5000;
+const forgetFiles = (cwd) => filesCache.delete(cwd);
+
 /** Project files relative to cwd (git ls-files when possible: honours .gitignore), at most `max`+1. */
 async function allFiles(cwd, max) {
+  const hit = filesCache.get(cwd);
+  if (hit && Date.now() - hit.at < FILES_CACHE_MS) return hit.files;
+  const files = await listFiles(cwd, Math.max(max, GREP_FILES_MAX)); // one list for every caller
+  filesCache.set(cwd, { ...files, at: Date.now() });
+  return files.files;
+}
+
+/** Whether cwd is in a git work tree (cached with the file list). */
+async function inGit(cwd) {
+  if (!filesCache.has(cwd)) await allFiles(cwd, GREP_FILES_MAX);
+  return !!filesCache.get(cwd)?.git;
+}
+
+async function listFiles(cwd, max) {
   const r = await git.git(['ls-files', '--cached', '--others', '--exclude-standard'], { cwd, timeoutMs: 15_000 });
-  if (r.ok) return [...new Set(r.stdout.split('\n').map((s) => s.trim()).filter(Boolean))];
+  if (r.ok) return { files: [...new Set(r.stdout.split('\n').map((s) => s.trim()).filter(Boolean))], git: true };
   const files = [];
   const walk = async (dir, rel) => {
     if (files.length > max) return;
@@ -59,14 +84,58 @@ async function allFiles(cwd, max) {
     }
   };
   await walk(cwd, '');
-  return files;
+  return { files, git: false };
 }
 
-/** Project files (git ls-files when possible), relative to cwd, capped. */
+const LISTING_LINES = 150; // lines of the file list a first message carries
+
+/**
+ * The file list folded to at most `budget` lines: while it is too long, the folder with the most
+ * lines among those whose subfolders are already folded becomes one line —
+ * `server/adapters/ (14 dosya: claude.js, codex.js, … — LIST ile aç)`. Small projects stay as is.
+ */
+export function compactListing(files, budget = LISTING_LINES) {
+  if (files.length <= budget) return files.slice();
+  const root = { name: '', dirs: new Map(), files: [], count: 0, open: true };
+  for (const f of files) {
+    const parts = f.split('/');
+    let node = root;
+    node.count++;
+    for (const part of parts.slice(0, -1)) {
+      if (!node.dirs.has(part)) node.dirs.set(part, { name: `${node.name}${part}/`, dirs: new Map(), files: [], count: 0, open: true });
+      node = node.dirs.get(part);
+      node.count++;
+    }
+    node.files.push(f);
+  }
+  const lines = (n) => (n.open ? n.files.length + [...n.dirs.values()].reduce((k, d) => k + lines(d), 0) : 1);
+  const all = [];
+  const walk = (n) => { for (const d of n.dirs.values()) { all.push(d); walk(d); } };
+  walk(root);
+  while (lines(root) > budget) {
+    const ready = all.filter((d) => d.open && [...d.dirs.values()].every((c) => !c.open));
+    if (!ready.length) break;
+    const pick = ready.reduce((a, b) => (lines(b) > lines(a) ? b : a));
+    pick.open = false;
+  }
+  const out = [];
+  const render = (n) => {
+    for (const f of n.files) out.push(f);
+    for (const d of n.dirs.values()) {
+      if (d.open) { render(d); continue; }
+      const names = [...d.files.map((f) => f.slice(d.name.length)), ...[...d.dirs.keys()].map((k) => `${k}/`)];
+      const shown = names.slice(0, 4).join(', ');
+      out.push(`${d.name} (${d.count} dosya: ${shown}${names.length > 4 ? ', …' : ''} — LIST ile aç)`);
+    }
+  };
+  render(root);
+  return out;
+}
+
+/** Project files (git ls-files when possible), relative to cwd; big projects folded (compactListing). */
 export async function projectListing(cwd) {
   const files = await allFiles(cwd, LISTING_MAX);
-  const more = files.length > LISTING_MAX ? files.length - LISTING_MAX : 0;
-  return { files: files.slice(0, LISTING_MAX), more };
+  return { files: compactListing(files), more: 0 };
 }
 
 const GREP_FILES_MAX = 20_000;
@@ -80,48 +149,120 @@ export function parseGrepSpec(spec) {
   return m ? { pattern: m[1], dir: m[2] } : { pattern: String(spec || '').trim(), dir: '' };
 }
 
+const hitLine = (rel, n, line) => {
+  const t = line.trim();
+  return `${rel}:${n}: ${t.length > GREP_LINE_MAX ? `${t.slice(0, GREP_LINE_MAX)}…` : t}`;
+};
+
+// ripgrep when the machine has it (also the copy VS Code ships): much faster on big projects.
+let rgPath; // undefined: not looked for yet; null: none
+function findRg() {
+  if (rgPath !== undefined) return rgPath;
+  const local = process.env.LOCALAPPDATA || '';
+  const vscode = [
+    local && path.join(local, 'Programs', 'Microsoft VS Code', 'resources', 'app', 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg.exe'),
+    local && path.join(local, 'Programs', 'Microsoft VS Code', 'resources', 'app', 'node_modules.asar.unpacked', '@vscode', 'ripgrep', 'bin', 'rg.exe'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Microsoft VS Code', 'resources', 'app', 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg.exe'),
+    '/Applications/Visual Studio Code.app/Contents/Resources/app/node_modules/@vscode/ripgrep/bin/rg',
+  ].filter(Boolean);
+  rgPath = which('rg') || vscode.find((p) => existsSync(p)) || null;
+  return rgPath;
+}
+
+/** One pattern with ripgrep → { hits, more, files }, or null when rg failed (the Node search runs then). */
+function rgSearch(cwd, pattern, literal, prefix, git) {
+  const rg = findRg();
+  if (!rg) return Promise.resolve(null);
+  const args = ['--line-number', '--no-heading', '--color=never', '--ignore-case', '--hidden', '--sort=path',
+    `--max-filesize=${GREP_FILE_BYTES}`, '--glob=!.git', ...(literal ? ['--fixed-strings'] : [])];
+  // Outside git the Node search skips build/dependency folders; inside git, .gitignore decides.
+  if (!git) for (const d of SKIP_DIRS) args.push(`--glob=!${d}/`);
+  args.push('--regexp', pattern, '--', prefix ? prefix.replace(/\/$/, '') : '.');
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawn(rg, args, { cwd, windowsHide: true }); } catch { resolve(null); return; }
+    const hits = [];
+    const files = new Set();
+    let more = 0;
+    let rest = '';
+    let failed = false;
+    const timer = setTimeout(() => { failed = true; child.kill(); }, 20_000);
+    const take = (line) => {
+      const m = /^(.*?):(\d+):(.*)$/.exec(line);
+      if (!m) return;
+      const rel = m[1].replace(/\\/g, '/').replace(/^\.\//, '');
+      files.add(rel);
+      if (hits.length >= GREP_HITS_MAX) more++; else hits.push(hitLine(rel, m[2], m[3]));
+    };
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (d) => {
+      const lines = (rest + d).split(/\r?\n/);
+      rest = lines.pop();
+      for (const l of lines) take(l);
+    });
+    child.on('error', () => { clearTimeout(timer); resolve(null); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (rest) take(rest);
+      // 0 = matches, 1 = none, 2 = error (e.g. a regex rg doesn't understand)
+      resolve(failed || code === 2 || code == null ? null : { hits, more, files: files.size });
+    });
+  });
+}
+
+/** One pattern in Node, over the project's files (read in parallel batches). */
+async function nodeSearch(cwd, re, prefix, files) {
+  const hits = [];
+  let more = 0;
+  let matchedFiles = 0;
+  const list = prefix ? files.filter((rel) => rel.startsWith(prefix)) : files;
+  const read = async (rel) => {
+    try {
+      const abs = path.join(cwd, rel);
+      const st = await fs.stat(abs);
+      if (!st.isFile() || st.size > GREP_FILE_BYTES) return null;
+      const buf = await fs.readFile(abs);
+      return buf.subarray(0, 8000).includes(0) ? null : buf.toString('utf8');
+    } catch { return null; }
+  };
+  for (let i = 0; i < list.length; i += 32) {
+    const batch = list.slice(i, i + 32);
+    const texts = await Promise.all(batch.map(read));
+    batch.forEach((rel, k) => {
+      if (texts[k] == null) return;
+      const lines = texts[k].split(/\r?\n/);
+      let hit = false;
+      for (let n = 0; n < lines.length; n++) {
+        if (!re.test(lines[n])) continue;
+        hit = true;
+        if (hits.length >= GREP_HITS_MAX) { more++; continue; }
+        hits.push(hitLine(rel, n + 1, lines[n]));
+      }
+      if (hit) matchedFiles++;
+    });
+  }
+  return { hits, more, files: matchedFiles };
+}
+
 /**
  * Searches the project for each spec (case-insensitive regex; invalid regex → literal text).
  * Resolves [{ spec, hits: ['path:line: text'], more, files, error? }].
  */
 export async function grepProject(cwd, specs) {
   const out = [];
-  let files = null;
   for (const spec of [...new Set(specs)].slice(0, 5)) {
     const { pattern, dir } = parseGrepSpec(spec);
     if (!pattern) { out.push({ spec, error: 'boş desen' }); continue; }
     let re;
-    try { re = new RegExp(pattern, 'i'); } catch { re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+    let literal = false;
+    try { re = new RegExp(pattern, 'i'); } catch { literal = true; re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
     let prefix = '';
     if (dir && dir !== '.') {
       try { prefix = `${safePath(cwd, dir.replace(/\/+$/, '')).rel}/`; } catch (err) { out.push({ spec, error: err.message }); continue; }
     }
-    files ||= (await allFiles(cwd, GREP_FILES_MAX)).slice(0, GREP_FILES_MAX);
-    const hits = [];
-    let more = 0;
-    let matchedFiles = 0;
-    for (const rel of files) {
-      if (prefix && !rel.startsWith(prefix)) continue;
-      const abs = path.join(cwd, rel);
-      let buf;
-      try {
-        const st = await fs.stat(abs);
-        if (!st.isFile() || st.size > GREP_FILE_BYTES) continue;
-        buf = await fs.readFile(abs);
-      } catch { continue; }
-      if (buf.subarray(0, 8000).includes(0)) continue;
-      const lines = buf.toString('utf8').split(/\r?\n/);
-      let hit = false;
-      for (let i = 0; i < lines.length; i++) {
-        if (!re.test(lines[i])) continue;
-        hit = true;
-        if (hits.length >= GREP_HITS_MAX) { more++; continue; }
-        const t = lines[i].trim();
-        hits.push(`${rel}:${i + 1}: ${t.length > GREP_LINE_MAX ? `${t.slice(0, GREP_LINE_MAX)}…` : t}`);
-      }
-      if (hit) matchedFiles++;
-    }
-    out.push({ spec, hits, more, files: matchedFiles });
+    const found = await rgSearch(cwd, pattern, literal, prefix, await inGit(cwd))
+      || await nodeSearch(cwd, re, prefix, (await allFiles(cwd, GREP_FILES_MAX)).slice(0, GREP_FILES_MAX));
+    out.push({ spec, ...found });
   }
   return out;
 }
@@ -277,6 +418,55 @@ export async function runCommands(ctx, cwd, commands, permission, tool) {
   for (const command of commands.slice(RUNS_PER_ROUND)) out.push({ command, refused: `bir mesajda en fazla ${RUNS_PER_ROUND} komut; sonra tekrar iste` });
   return out;
 }
+
+// ---- tests after edits ---------------------------------------------------------------------
+// When an agent's changes were applied and it didn't run anything itself, Ortak runs the project's
+// tests right away (setting autoTest): a failure goes back in the same follow-up message, a pass
+// ends the task without another round just to ask for `RUN: npm test`.
+
+const testCache = new Map(); // cwd → { cmd, at }
+const TEST_CACHE_MS = 60_000;
+
+async function exists(p) {
+  try { await fs.access(p); return true; } catch { return false; }
+}
+
+/** The project's test command, or null when none can be told from its files. */
+export async function testCommand(cwd) {
+  const hit = testCache.get(cwd);
+  if (hit && Date.now() - hit.at < TEST_CACHE_MS) return hit.cmd;
+  let cmd = null;
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(cwd, 'package.json'), 'utf8'));
+    const t = pkg?.scripts?.test;
+    if (typeof t === 'string' && t.trim() && !/no test specified/i.test(t)) {
+      cmd = (await exists(path.join(cwd, 'pnpm-lock.yaml'))) ? 'pnpm test'
+        : (await exists(path.join(cwd, 'yarn.lock'))) ? 'yarn test' : 'npm test';
+    }
+  } catch { /* no package.json */ }
+  if (!cmd) {
+    if (await exists(path.join(cwd, 'go.mod'))) cmd = 'go test ./...';
+    else if (await exists(path.join(cwd, 'Cargo.toml'))) cmd = 'cargo test';
+    else if (await exists(path.join(cwd, 'pytest.ini'))) cmd = 'python -m pytest -q';
+    else {
+      const py = await fs.readFile(path.join(cwd, 'pyproject.toml'), 'utf8').catch(() => '');
+      if (/\bpytest\b/.test(py)) cmd = 'python -m pytest -q';
+    }
+  }
+  testCache.set(cwd, { cmd, at: Date.now() });
+  return cmd;
+}
+
+/** Runs the tests after applied edits (see above). Resolves the command result or null. */
+async function autoTest(ctx, cwd, results, runs, permission, tool) {
+  if (getSettings().autoTest === false || runs.length || !results.some((r) => r.ok)) return null;
+  const cmd = await testCommand(cwd);
+  if (!cmd || policyOf(cmd, permission)) return null;
+  const [r] = await runCommands(ctx, cwd, [cmd], permission, tool);
+  return r.refused ? null : { ...r, auto: true };
+}
+
+const testPassed = (t) => `\n\n[Ortak: değişikliklerden sonra \`${t.command}\` kendiliğinden çalıştırıldı — geçti]`;
 
 /** One folder's entries (dirs first, `name/`), relative to cwd. Root (`.`) allowed. */
 export async function listDirs(cwd, paths) {
@@ -469,25 +659,80 @@ function countOf(hay, needle) {
   return n;
 }
 
-/** Replace `search` in `content` (LF text): exact, else ignoring trailing whitespace per line. */
+const MANY = 'ARA metni dosyada birden fazla yerde geçiyor; daha uzun, benzersiz bir ARA metni ver';
+const FUZZY_MIN_LINES = 4;   // near matches only for blocks with at least this many non-blank lines
+const FUZZY_MIN_SCORE = 0.8; // share of the block's lines that must match
+const indentOf = (l) => /^[ \t]*/.exec(l)[0];
+const squash = (l) => l.trim().replace(/\s+/g, ' ');
+
+/** `replace` re-indented by how the file's lines at `at` are indented compared to `search`. */
+function reindent(fileLines, at, searchLines, replace) {
+  const k = searchLines.findIndex((l) => l.trim());
+  if (k < 0 || !fileLines[at + k]) return replace;
+  const have = indentOf(fileLines[at + k]);
+  const want = indentOf(searchLines[k]);
+  if (have === want) return replace;
+  return replace.split('\n').map((l) => {
+    if (!l.trim()) return l;
+    if (have.startsWith(want)) return have.slice(want.length) + l;           // file is indented more
+    if (want.startsWith(have) && l.startsWith(want.slice(have.length))) return l.slice(want.length - have.length);
+    return l;
+  }).join('\n');
+}
+
+/**
+ * Replace `search` in `content` (LF text). Tries, in order: exact; ignoring trailing whitespace;
+ * ignoring indentation and runs of spaces (the replacement is re-indented); a near match — one
+ * place where ≥ 80% of the block's lines match and no other place comes close (models copying from
+ * a web UI often lose or change a line). Resolves { content, how } (how: 'exact' | 'spaces' | 'near').
+ */
 function replaceOnce(content, search, replace) {
   const exact = countOf(content, search);
-  if (exact === 1) return content.replace(search, () => replace);
-  if (exact > 1) throw new Error('ARA metni dosyada birden fazla yerde geçiyor; daha uzun, benzersiz bir ARA metni ver');
-  const rstrip = (s) => s.replace(/[ \t]+$/, '');
+  if (exact === 1) return { content: content.replace(search, () => replace), how: 'exact' };
+  if (exact > 1) throw new Error(MANY);
   const lines = content.split('\n');
-  const want = search.split('\n').map(rstrip);
-  const hits = [];
-  for (let i = 0; i + want.length <= lines.length; i++) {
-    let ok = true;
-    for (let k = 0; k < want.length && ok; k++) ok = rstrip(lines[i + k]) === want[k];
-    if (ok) hits.push(i);
+  const want = search.split('\n');
+  // Leading/trailing blank lines in the block say nothing about where it goes.
+  while (want.length > 1 && !want[0].trim()) want.shift();
+  while (want.length > 1 && !want.at(-1).trim()) want.pop();
+  const scan = (same) => {
+    const hits = [];
+    for (let i = 0; i + want.length <= lines.length; i++) {
+      let ok = true;
+      for (let k = 0; k < want.length && ok; k++) ok = same(lines[i + k], want[k]);
+      if (ok) hits.push(i);
+    }
+    return hits;
+  };
+  const splice = (at, how, text = replace) => {
+    const out = lines.slice();
+    out.splice(at, want.length, ...text.split('\n'));
+    return { content: out.join('\n'), how };
+  };
+  const rstrip = (l) => l.replace(/[ \t]+$/, '');
+  let hits = scan((a, b) => rstrip(a) === rstrip(b));
+  if (hits.length === 1) return splice(hits[0], 'spaces');
+  if (hits.length > 1) throw new Error(MANY);
+  hits = scan((a, b) => squash(a) === squash(b));
+  if (hits.length === 1) return splice(hits[0], 'spaces', reindent(lines, hits[0], want, replace));
+  if (hits.length > 1) throw new Error(MANY);
+
+  const solid = want.filter((l) => l.trim()).length;
+  if (solid >= FUZZY_MIN_LINES) {
+    const wanted = want.map(squash);
+    const flat = lines.map(squash);
+    let best = { score: 0, at: -1 };
+    let second = 0;
+    for (let i = 0; i + want.length <= lines.length; i++) {
+      let same = 0;
+      for (let k = 0; k < want.length; k++) if (wanted[k] && flat[i + k] === wanted[k]) same++;
+      const score = same / solid;
+      if (score > best.score) { second = best.score; best = { score, at: i }; } else if (score > second) second = score;
+    }
+    if (best.score >= FUZZY_MIN_SCORE && second < best.score - 0.25) {
+      return splice(best.at, 'near', reindent(lines, best.at, want, replace));
+    }
   }
-  if (hits.length === 1) {
-    lines.splice(hits[0], want.length, ...replace.split('\n'));
-    return lines.join('\n');
-  }
-  if (hits.length > 1) throw new Error('ARA metni dosyada birden fazla yerde geçiyor; daha uzun, benzersiz bir ARA metni ver');
   throw new Error('ARA metni dosyada birebir bulunamadı (boşluklar ve satırlar dahil aynen kopyalanmalı)');
 }
 
@@ -517,8 +762,9 @@ export async function applyEdits(cwd, edits, cp) {
           results.push({ path: rel, ok: true, created: original == null });
         } else {
           if (content == null) throw new Error('dosya yok (yeni dosya için ARA kısmını boş bırak)');
-          content = replaceOnce(content, b.search, b.replace);
-          results.push({ path: rel, ok: true });
+          const r = replaceOnce(content, b.search, b.replace);
+          content = r.content;
+          results.push({ path: rel, ok: true, ...(r.how === 'near' ? { near: true } : {}) });
         }
         changed = true;
       } catch (err) {
@@ -529,12 +775,79 @@ export async function applyEdits(cwd, edits, cp) {
       await cp?.note(abs, rel);
       await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, crlf ? content.replace(/\n/g, '\r\n') : content, 'utf8');
+      if (original == null) forgetFiles(cwd);
     }
   }
   return results;
 }
 
 let toolSeq = 0;
+
+// ---- prefetch: send what a task obviously needs with the first message ------------------------
+// Every READ costs a round trip (a whole Gemini turn), so files the task names — and the outlines
+// of what they import — go out with the task itself.
+
+const PREFETCH_FILES = 6;
+const PREFETCH_OUTLINES = 6;
+const PATH_TOKEN = /[\w@~.-]*[\w-]\/[\w@./-]*\w|[\w-]+\.[a-z][a-z0-9]{0,5}\b/gi;
+const IMPORTS = [
+  /\bfrom\s+['"](\.{1,2}\/[^'"]+)['"]/g,
+  /\bimport\s+['"](\.{1,2}\/[^'"]+)['"]/g,
+  /\brequire\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g,
+  /\bimport\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g,
+];
+const RESOLVE_EXT = ['', '.js', '.mjs', '.ts', '.tsx', '.jsx', '/index.js', '/index.ts'];
+
+/** Project files named in `text` (full paths, or a file name that only one file has). */
+export function mentionedFiles(text, files) {
+  const set = new Set(files);
+  const byName = new Map();
+  for (const f of files) {
+    const name = f.split('/').pop();
+    byName.set(name, byName.has(name) ? null : f); // null: more than one file has this name
+  }
+  const out = [];
+  for (const m of String(text || '').matchAll(PATH_TOKEN)) {
+    const t = m[0].replace(/^\.\//, '').replace(/[.:]+$/, '');
+    const hit = set.has(t) ? t : !t.includes('/') ? byName.get(t) : files.find((f) => f.endsWith(`/${t}`));
+    if (hit && !out.includes(hit)) out.push(hit);
+  }
+  return out;
+}
+
+/** Local files `rel` imports (relative JS/TS imports resolved against the project's files). */
+function localImports(rel, text, files) {
+  const set = new Set(files);
+  const dir = path.posix.dirname(rel);
+  const out = [];
+  for (const re of IMPORTS) {
+    for (const m of text.matchAll(re)) {
+      const base = path.posix.normalize(path.posix.join(dir, m[1]));
+      const hit = RESOLVE_EXT.map((e) => base + e).find((c) => set.has(c));
+      if (hit && hit !== rel && !out.includes(hit)) out.push(hit);
+    }
+  }
+  return out;
+}
+
+/**
+ * What to send with a task: the given `files` plus the ones its text names (read, ≤ PREFETCH_FILES)
+ * and the outlines of the files those import. Resolves { attached, outlines }.
+ */
+export async function prefetch(cwd, text, given = []) {
+  const files = (await allFiles(cwd, GREP_FILES_MAX)).slice(0, GREP_FILES_MAX);
+  const named = [...new Set([...given, ...mentionedFiles(text, files)])].slice(0, PREFETCH_FILES);
+  const attached = named.length ? await readFiles(cwd, named) : [];
+  const imported = [];
+  for (const f of attached) {
+    if (f.error || f.from) continue;
+    for (const dep of localImports(f.path, f.text, files)) {
+      if (!named.includes(dep) && !imported.includes(dep)) imported.push(dep);
+    }
+  }
+  const outlines = imported.length ? await outlineFiles(cwd, imported.slice(0, PREFETCH_OUTLINES)) : [];
+  return { attached, outlines: outlines.filter((o) => !o.error) };
+}
 
 /**
  * One delegated task for a text-only agent. Loops (≤ MAX_ROUNDS turns): files it asks for are
@@ -544,17 +857,17 @@ let toolSeq = 0;
 export async function textCoderTask(ctx, laneId, opts) {
   const cp = checkpoints.begin(ctx.meta.id);
   try {
-    let attached;
+    const { goal, task, files = [], permission, leadName } = opts;
+    const cwd = ctx.meta.cwd;
+    const tool = cardEmitter(ctx, laneId);
+    const { attached, outlines } = await prefetch(cwd, task, files);
+    for (const f of attached) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
+    if (outlines.length) tool('Ortak: ana hat', { path: outlines.map((o) => o.path).join(', ') }, `${outlines.length} dosyanın ana hattı görevle birlikte gönderildi`);
     if (await canUseTools(ctx, laneId)) {
-      const { goal, task, files = [], permission, leadName } = opts;
-      const cwd = ctx.meta.cwd;
       const readOnly = permission === 'read-only';
-      const tool = cardEmitter(ctx, laneId);
-      attached = files.length ? await readFiles(cwd, files) : [];
-      for (const f of attached) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
       try {
         const r = await nativeTurn(ctx, laneId, {
-          prompt: P.nativeCoderTask({ goal, task, listing: await projectListing(cwd), attached, readOnly, leadName }),
+          prompt: P.nativeCoderTask({ goal, task, listing: await projectListing(cwd), attached, outlines, readOnly, leadName }),
           permission, cwd, system: P.nativeCoderSystem(permission),
         }, cp);
         return { text: r.text, applied: r.applied, failed: [...r.failed].map(([p, error]) => ({ path: p, error })), readOnly };
@@ -563,7 +876,7 @@ export async function textCoderTask(ctx, laneId, opts) {
         fellBack(ctx, laneId, err);
       }
     }
-    return await coderLoop(ctx, laneId, { ...opts, attached }, cp);
+    return await coderLoop(ctx, laneId, { ...opts, attached, outlines }, cp);
   } finally {
     await emitCheckpoint(ctx, laneId, cp);
   }
@@ -579,7 +892,7 @@ async function emitCheckpoint(ctx, laneId, cp) {
   }
 }
 
-async function coderLoop(ctx, laneId, { goal, task, files = [], permission, leadName, attached: preread }, cp) {
+async function coderLoop(ctx, laneId, { goal, task, files = [], permission, leadName, attached: preread, outlines: preOutlines = [] }, cp) {
   const cwd = ctx.meta.cwd;
   const readOnly = permission === 'read-only';
   const tool = (name, input, output, isError = false) => {
@@ -594,7 +907,8 @@ async function coderLoop(ctx, laneId, { goal, task, files = [], permission, lead
   if (!preread) for (const f of attached) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
 
   const up = new Uploader(ctx, laneId);
-  let prompt = P.textCoderTask({ goal, task, listing, attached: await up.stage(attached), readOnly, leadName });
+  let passed = null; // the last automatic test run that passed
+  let prompt = P.textCoderTask({ goal, task, listing, attached: await up.stage(attached), outlines: preOutlines, readOnly, leadName });
   const applied = new Set();
   const failedNow = new Map();
   let text = '';
@@ -610,13 +924,15 @@ async function coderLoop(ctx, laneId, { goal, task, files = [], permission, lead
       } else {
         results = await applyEdits(cwd, edits, cp);
         for (const res of results) {
-          tool(res.created ? 'Ortak: dosya oluştur' : 'Ortak: düzenle', { path: res.path }, res.ok ? 'Uygulandı' : res.error, !res.ok);
+          tool(res.created ? 'Ortak: dosya oluştur' : 'Ortak: düzenle', { path: res.path }, res.ok ? (res.near ? 'Uygulandı (yaklaşık eşleşme)' : 'Uygulandı') : res.error, !res.ok);
           if (res.ok) { applied.add(res.path); failedNow.delete(res.path); } else failedNow.set(res.path, res.error);
         }
       }
     }
     const failed = results.filter((x) => !x.ok);
     const ran = runs.length ? await runCommands(ctx, cwd, runs, permission, tool) : [];
+    const test = !readOnly && round < MAX_ROUNDS ? await autoTest(ctx, cwd, results, runs, permission, tool) : null;
+    if (test && (test.code !== 0 || test.timedOut)) ran.push(test); else if (test) passed = test;
     const found = greps.length && round < MAX_ROUNDS ? await grepAndReport(cwd, greps, tool) : [];
     const outl = outlines.length && round < MAX_ROUNDS ? await outlineAndReport(cwd, outlines, tool) : [];
     const fresh = reads.length && round < MAX_ROUNDS ? await readFiles(cwd, reads) : [];
@@ -633,7 +949,7 @@ async function coderLoop(ctx, laneId, { goal, task, files = [], permission, lead
       : P.textCoderFollow({ files: await up.stage(fresh), ran, found, outlines: outl, results, current: await up.stage(current) });
   }
   return {
-    text,
+    text: passed ? text + testPassed(passed) : text,
     applied: [...applied],
     failed: [...failedNow].map(([p, error]) => ({ path: p, error })),
     readOnly,
@@ -652,8 +968,18 @@ const CHAT_ROUNDS = 10; // agent turns per user message (reads, listings, comman
 export async function textChatTurn(ctx, laneId, opts) {
   const cp = checkpoints.begin(ctx.meta.id);
   try {
+    // Files the message names go out with it (`mention`: the user's own text, without the listing).
+    let pre = { attached: [], outlines: [] };
+    if (opts.mention) {
+      const cwd = opts.cwd || ctx.meta.cwd;
+      pre = await prefetch(cwd, opts.mention);
+      const tool = cardEmitter(ctx, laneId);
+      for (const f of pre.attached) tool('Ortak: dosya oku', { path: f.path }, readNote(f), !!f.error);
+      if (pre.outlines.length) tool('Ortak: ana hat', { path: pre.outlines.map((o) => o.path).join(', ') }, `${pre.outlines.length} dosyanın ana hattı mesajla birlikte gönderildi`);
+    }
     if (await canUseTools(ctx, laneId)) {
-      const { prompt, permission, resume = true, cwd = ctx.meta.cwd, system } = opts;
+      const { permission, resume = true, cwd = ctx.meta.cwd, system } = opts;
+      const prompt = opts.prompt + P.prefetched(pre);
       try {
         const r = await nativeTurn(ctx, laneId, {
           prompt, permission, cwd, resume, system: [P.nativeChatSystem(permission), system].filter(Boolean).join('\n\n'),
@@ -664,13 +990,13 @@ export async function textChatTurn(ctx, laneId, opts) {
         fellBack(ctx, laneId, err);
       }
     }
-    return await chatLoop(ctx, laneId, opts, cp);
+    return await chatLoop(ctx, laneId, { ...opts, pre }, cp);
   } finally {
     await emitCheckpoint(ctx, laneId, cp);
   }
 }
 
-async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = ctx.meta.cwd, system }, cp) {
+async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = ctx.meta.cwd, system, pre }, cp) {
   const readOnly = permission === 'read-only';
   const tool = (name, input, output, isError = false) => {
     const id = `ortak-${++toolSeq}`;
@@ -680,7 +1006,9 @@ async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = 
   tool.lane = laneId;
   const applied = new Set();
   const up = new Uploader(ctx, laneId, { resume });
+  if (pre?.attached.length || pre?.outlines.length) prompt += P.prefetched({ ...pre, attached: await up.stage(pre.attached) });
   let text = '';
+  let passed = null;
   for (let round = 1; round <= CHAT_ROUNDS; round++) {
     const r = await up.turn({ prompt, permission: 'read-only', system: [P.textChatSystem(permission), system].filter(Boolean).join('\n\n'), resume: round > 1 || resume });
     text = r.text;
@@ -694,7 +1022,7 @@ async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = 
       } else {
         results = await applyEdits(cwd, edits, cp);
         for (const res of results) {
-          tool(res.created ? 'Ortak: dosya oluştur' : 'Ortak: düzenle', { path: res.path }, res.ok ? 'Uygulandı' : res.error, !res.ok);
+          tool(res.created ? 'Ortak: dosya oluştur' : 'Ortak: düzenle', { path: res.path }, res.ok ? (res.near ? 'Uygulandı (yaklaşık eşleşme)' : 'Uygulandı') : res.error, !res.ok);
           if (res.ok) applied.add(res.path);
         }
       }
@@ -703,6 +1031,8 @@ async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = 
     const failed = readOnly ? [] : results.filter((x) => !x.ok);
     // Commands run after the edits (so `RUN: npm test` tests the changed code).
     const ran = runs.length ? await runCommands(ctx, cwd, runs, permission, tool) : [];
+    const test = !readOnly && !last ? await autoTest(ctx, cwd, results, runs, permission, tool) : null;
+    if (test && (test.code !== 0 || test.timedOut)) ran.push(test); else if (test) passed = test;
     const found = greps.length && !last ? await grepAndReport(cwd, greps, tool) : [];
     const outl = outlines.length && !last ? await outlineAndReport(cwd, outlines, tool) : [];
     const files = reads.length && !last ? await readFiles(cwd, reads) : [];
@@ -721,7 +1051,7 @@ async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = 
       ? P.textChatBrokenBlocks
       : P.textChatFollow({ files: await up.stage(files), dirs, ran, found, outlines: outl, results: readOnly ? [] : results, current: await up.stage(current) });
   }
-  return { text, applied: [...applied] };
+  return { text: passed ? text + testPassed(passed) : text, applied: [...applied] };
 }
 
 // ---- real function calling (API agents: Groq, OpenRouter, EVREN) ------------------------------
@@ -812,7 +1142,7 @@ function nativeExecutor(ctx, laneId, { cwd, permission, cp, applied, failed }) {
   const tool = cardEmitter(ctx, laneId);
   const readOnly = permission === 'read-only';
   const editResult = (res) => {
-    tool(res.created ? 'Ortak: dosya oluştur' : 'Ortak: düzenle', { path: res.path }, res.ok ? 'Uygulandı' : res.error, !res.ok);
+    tool(res.created ? 'Ortak: dosya oluştur' : 'Ortak: düzenle', { path: res.path }, res.ok ? (res.near ? 'Uygulandı (yaklaşık eşleşme)' : 'Uygulandı') : res.error, !res.ok);
     if (res.ok) { applied.add(res.path); failed.delete(res.path); } else failed.set(res.path, res.error);
   };
   return async (name, a) => {
@@ -864,7 +1194,7 @@ function nativeExecutor(ctx, laneId, { cwd, permission, cp, applied, failed }) {
         if (!a.path) return 'Hata: path gerekli';
         const [res] = await applyEdits(cwd, [{ path: String(a.path), search: String(a.old_text ?? ''), replace: String(a.new_text ?? '') }], cp);
         editResult(res);
-        if (res.ok) return res.created ? 'Dosya oluşturuldu.' : 'Uygulandı.';
+        if (res.ok) return res.created ? 'Dosya oluşturuldu.' : res.near ? 'Uygulandı (old_text birebir değildi, en yakın yere uygulandı; sonucu kontrol et).' : 'Uygulandı.';
         return `UYGULANAMADI: ${res.error.replace(/ARA (metni|kısmı)/g, 'old_text')}. Dosyayı read_file ile yeniden okuyup tekrar dene` +
           (a.old_text ? '.' : ' (mevcut bir dosyayı baştan yazmak için write_file kullan).');
       }
@@ -879,6 +1209,7 @@ function nativeExecutor(ctx, laneId, { cwd, permission, cp, applied, failed }) {
         await cp?.note(sp.abs, sp.rel);
         await fs.mkdir(path.dirname(sp.abs), { recursive: true });
         await fs.writeFile(sp.abs, before?.includes('\r\n') ? text.replace(/\n/g, '\r\n') : text, 'utf8');
+        if (before == null) forgetFiles(cwd);
         editResult({ path: sp.rel, ok: true, created: before == null });
         return before == null ? 'Dosya oluşturuldu.' : 'Dosya baştan yazıldı.';
       }
@@ -908,7 +1239,7 @@ async function nativeTurn(ctx, laneId, { prompt, permission, cwd, system, resume
   const applied = new Set();
   const failed = new Map();
   const exec = nativeExecutor(ctx, laneId, { cwd, permission, cp, applied, failed });
-  const r = await ctx.turn(laneId, { prompt, permission: 'read-only', system, resume, tools: { defs: nativeToolDefs(permission), exec } });
+  const r = await ctx.turn(laneId, { prompt, permission: 'read-only', system, resume, tools: { defs: nativeToolDefs(permission), exec, parallel: READ_TOOLS } });
   return { text: r.text, applied: [...applied], failed };
 }
 
@@ -926,6 +1257,6 @@ export async function work(ctx, laneId, { prompt, permission = 'read-only', syst
   if (!isTextOnly(ctx, laneId)) return ctx.turn(laneId, { prompt, permission, system, cwd, resume });
   const fresh = !resume || !ctx.canResume(laneId);
   const body = fresh ? P.textWorkIntro({ listing: await projectListing(cwd), prompt }) : prompt;
-  return textChatTurn(ctx, laneId, { prompt: body, permission, resume, cwd, system });
+  return textChatTurn(ctx, laneId, { prompt: body, permission, resume, cwd, system, mention: prompt });
 }
 export const _internals = { parseAnswer, replaceOnce, clip };

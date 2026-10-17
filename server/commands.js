@@ -9,7 +9,37 @@ import { spawn } from 'node:child_process';
 import { IS_WIN, which, killTree } from './adapters/base.js';
 
 export const COMMAND_TIMEOUT_MS = 120_000;
-const OUTPUT_MAX = 12_000; // chars of output sent back (tail; head kept short)
+const OUTPUT_MAX = 12_000; // chars of output sent back for a failing command (head + error lines + tail)
+const OUTPUT_OK_MAX = 3000; // a command that succeeded: its end says enough ("12 passed")
+const HEAD_KEEP = 1500;
+const ERROR_LINES_MAX = 60;
+// Lines worth keeping from the middle of a long failing output.
+const ERROR_LINE = /\b(error|errors|fail|failed|failing|failure|exception|traceback|assert|panic|cannot|not found|undefined|expected|hata|başarısız)\b|✗|✖|×|FAIL|ERR!/i;
+const strip = (t) => t.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r\n?/g, '\n'); // eslint-disable-line no-control-regex
+
+/**
+ * Output for the agent: short when the command succeeded; for a failure the start, the error-like
+ * lines from the part that was cut, and the end. `head` = the first chars, `body` = the rest kept,
+ * `errs` = error lines already seen in what scrolled out, `dropped` = chars that scrolled out.
+ */
+export function shapeOutput({ head, body, errs = [], dropped = 0 }, ok) {
+  const max = ok ? OUTPUT_OK_MAX : OUTPUT_MAX;
+  const text = (head + body).trimEnd();
+  if (!dropped && text.length <= max) return text;
+  if (ok) {
+    const cut = dropped + text.length - (max - 600);
+    return `${text.slice(0, 600)}\n…(${cut} karakter çıktı atlandı; komut başarılı)…\n${text.slice(-(max - 600))}`;
+  }
+  const keepTail = max - HEAD_KEEP - 3000;
+  const middle = text.slice(HEAD_KEEP, Math.max(HEAD_KEEP, text.length - keepTail));
+  const found = [...errs, ...middle.split('\n').filter((l) => ERROR_LINE.test(l))]
+    .map((l) => (l.length > 300 ? `${l.slice(0, 299)}…` : l));
+  const picked = found.slice(0, ERROR_LINES_MAX);
+  const cut = dropped + middle.length;
+  return `${text.slice(0, HEAD_KEEP)}\n…(${cut} karakter çıktı atlandı` +
+    (picked.length ? `; aradaki hata satırları${found.length > picked.length ? ` (ilk ${picked.length})` : ''}:\n${picked.join('\n')}\n…` : ')…') +
+    `\n${text.slice(-keepTail)}`;
+}
 
 const MUTATING_COMMANDS = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'mv', 'move', 'ren', 'rename', 'cp', 'copy',
   'xcopy', 'robocopy', 'mkdir', 'md', 'touch', 'new-item', 'ni', 'remove-item', 'ri', 'move-item', 'mi',
@@ -97,11 +127,22 @@ export async function runCommand(cmd, { cwd, signal, timeoutMs = COMMAND_TIMEOUT
       env: { ...process.env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0', npm_config_yes: 'true' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let out = '';
+    // The start is kept apart; the rest scrolls, keeping its error-like lines as it goes.
+    let head = '';
+    let body = '';
     let dropped = 0;
+    const errs = [];
     const add = (d) => {
-      out += d.toString('utf8');
-      if (out.length > OUTPUT_MAX * 4) { dropped += out.length - OUTPUT_MAX * 2; out = out.slice(-OUTPUT_MAX * 2); }
+      let t = strip(d.toString('utf8'));
+      if (head.length < HEAD_KEEP) { const room = HEAD_KEEP - head.length; head += t.slice(0, room); t = t.slice(room); }
+      body += t;
+      if (body.length > OUTPUT_MAX * 4) {
+        const cutAt = body.lastIndexOf('\n', body.length - OUTPUT_MAX * 2) + 1 || body.length - OUTPUT_MAX * 2;
+        const gone = body.slice(0, cutAt);
+        if (errs.length < ERROR_LINES_MAX) errs.push(...gone.split('\n').filter((l) => ERROR_LINE.test(l)).slice(0, ERROR_LINES_MAX - errs.length));
+        dropped += gone.length;
+        body = body.slice(cutAt);
+      }
     };
     child.stdout.on('data', add);
     child.stderr.on('data', add);
@@ -114,12 +155,7 @@ export async function runCommand(cmd, { cwd, signal, timeoutMs = COMMAND_TIMEOUT
     child.on('close', (code) => {
       finish();
       if (signal?.aborted) { const e = new Error('İptal edildi'); e.name = 'AbortError'; reject(e); return; }
-      // eslint-disable-next-line no-control-regex
-      let text = out.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r\n?/g, '\n').trimEnd();
-      if (text.length > OUTPUT_MAX || dropped) {
-        const cut = dropped + Math.max(0, text.length - OUTPUT_MAX);
-        text = `${text.slice(0, 1500)}\n…(${cut} karakter çıktı atlandı)…\n${text.slice(-(OUTPUT_MAX - 1500))}`;
-      }
+      const text = shapeOutput({ head, body, errs, dropped }, code === 0 && !timedOut);
       resolve({ code: timedOut ? null : code, output: text, timedOut });
     });
   });

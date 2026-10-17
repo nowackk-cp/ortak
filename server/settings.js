@@ -12,6 +12,8 @@ export const DEFAULTS = Object.freeze({
   maxConcurrent: 2,           // agent turns that start a local CLI process (Claude, Codex) at once; 0 = no limit
   lowPriority: true,          // run agent processes / bridge windows at below-normal CPU priority
   geminiIdleMinutes: 10,      // close Ortak's Gemini window after this long without a turn; 0 = keep open
+  geminiTabs: 2,              // Gemini turns at once (one tab each); 1 = one at a time
+  autoTest: true,             // run the project's tests after Ortak applies a text-only agent's edits
   antigravityAutoStart: true, // open Antigravity on demand when a turn needs it
   antigravityIdleMinutes: 0,  // close Antigravity *if Ortak opened it* after this long idle; 0 = never
   limitsRefreshMinutes: 5,    // UI refreshes quotas this often while visible; 0 = only by hand
@@ -27,6 +29,8 @@ const RULES = {
   maxConcurrent: int(0, 8),
   lowPriority: bool,
   geminiIdleMinutes: int(0, 240),
+  geminiTabs: int(1, 4),
+  autoTest: bool,
   antigravityAutoStart: bool,
   antigravityIdleMinutes: int(0, 240),
   limitsRefreshMinutes: int(0, 120),

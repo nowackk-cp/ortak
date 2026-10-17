@@ -4,7 +4,7 @@
 // Why a browser: the Gemini desktop app is a wrapper around gemini.google.com with no local API
 // (and it blocks remote debugging), and Gemini CLI no longer accepts personal Google accounts.
 //
-// How a turn works: one shared tab, one turn at a time (a mutex). Open the conversation
+// How a turn works: a few tabs (setting geminiTabs), one turn at a time per tab. Open the conversation
 // (gemini.google.com/app[/<id>]), pick the model in the page's mode menu, type the prompt with
 // Input.insertText, press Enter, then poll the last <model-response> and stream its text. The
 // conversation id in the URL is the sessionId, so follow-ups continue the same Gemini chat (it also
@@ -53,7 +53,41 @@ const MODELS = [
 const LEVEL_SECTION = /düşünme düzeyi|thinking/i; // menu entry that expands the thinking levels
 
 const systemBySession = new Map(); // conversation id → system text already sent
-let queue = Promise.resolve();      // one turn at a time in the shared tab
+
+// ---- tabs ------------------------------------------------------------------------------------
+// Independent turns (two lead-mode workers, parallel tasks) run side by side, each in its own tab
+// of the same window (setting geminiTabs; 1 = the old one-at-a-time behaviour). Tab 0 is the
+// window's Gemini tab; the others are opened on demand. Each slot remembers where its tab is and
+// which model it picked, so the next turn in the same conversation skips reloading the page and
+// the model menu.
+const slots = [];   // [{ busy, targetId, url, modelId }]
+const waiting = []; // resolvers waiting for a free slot
+
+const tabCount = () => Math.max(1, Math.min(4, getSettings().geminiTabs || 1));
+
+/** Frees a slot; the waiting turns look for a free one again. */
+function release(slot) {
+  slot.busy = false;
+  for (const wake of waiting.splice(0)) wake();
+}
+
+/** Runs fn(slot) on a free tab slot, preferring the one already on `sessionId`'s conversation. */
+async function withSlot(sessionId, fn, signal) {
+  for (;;) {
+    while (slots.length < tabCount()) slots.push({ busy: false, targetId: null, url: '', modelId: null });
+    const free = slots.slice(0, tabCount()).filter((x) => !x.busy);
+    const slot = free.find((x) => sessionId && conversationId(x.url) === sessionId) || free[0];
+    if (slot) {
+      slot.busy = true;
+      try { return await fn(slot); } finally { release(slot); }
+    }
+    await new Promise((resolve) => {
+      waiting.push(resolve);
+      signal?.addEventListener('abort', resolve, { once: true });
+    });
+    if (signal?.aborted) throw new AbortError();
+  }
+}
 
 // ---- sleep / idle close ----------------------------------------------------------------------
 // The window is closed after `geminiIdleMinutes` without a turn and reopened (minimized) by the
@@ -119,12 +153,6 @@ export function healthWarning() {
   if (health.pageError) return `Gemini sayfada hata gösterdi: ${health.last.replace(/^Gemini: /, '')}`;
   if (health.fails >= 2) return `Gemini son ${health.fails} denemede başarısız oldu (son hata: ${health.last}). Pencereyi kontrol edin; gerekirse kapatıp Başlat'a basın.`;
   return null;
-}
-
-function withLock(fn) {
-  const next = queue.then(fn, fn);
-  queue = next.catch(() => {});
-  return next;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -370,16 +398,31 @@ async function key(page, keyName, code, vk, text) {
   await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, code, windowsVirtualKeyCode: vk });
 }
 
-/** Connects to the bridge's Gemini tab (launching the window if needed). */
-async function openPage({ launch = true, minimized = false } = {}) {
+/**
+ * Connects to a Gemini tab of the bridge window (launching the window if needed): the slot's own
+ * tab when it still exists, else (slot 0 / no slot) the window's Gemini tab, else a new tab.
+ */
+async function openPage({ launch = true, minimized = false, slot = null } = {}) {
   let port = await activePort();
   if (!port) {
     if (!launch) return null;
     port = await launchBrowser({ minimized });
+    for (const x of slots) { x.targetId = null; x.url = ''; x.modelId = null; } // a new window: new tabs
   }
   const pages = await listPages(port);
-  const target = pages.find((p) => p.url.includes('gemini.google.com')) || pages.find((p) => p.url.includes('accounts.google.com')) || pages[0];
-  if (!target) throw new Error(NOT_RUNNING);
+  let target = slot?.targetId && pages.find((p) => p.id === slot.targetId);
+  if (!target) {
+    if (slot) { slot.url = ''; slot.modelId = null; }
+    const others = new Set(slots.filter((x) => x !== slot && x.targetId).map((x) => x.targetId));
+    const mine = pages.filter((p) => !others.has(p.id));
+    if (!slot || slot === slots[0]) {
+      target = mine.find((p) => p.url.includes('gemini.google.com')) || mine.find((p) => p.url.includes('accounts.google.com')) || mine[0];
+    } else {
+      target = mine.find((p) => p.url.includes('gemini.google.com')) || await newPage(port, START_URL);
+    }
+  }
+  if (!target?.webSocketDebuggerUrl) throw new Error(NOT_RUNNING);
+  if (slot) slot.targetId = target.id;
   const page = await Page.connect(target.webSocketDebuggerUrl);
   await page.send('Page.enable').catch(() => {});
   return page;
@@ -444,7 +487,7 @@ async function selectModel(page, spec, signal) {
 
 const conversationId = (url) => (/\/app\/([0-9a-f]{8,})/i.exec(url || '') || [])[1] || null;
 
-async function turn({ prompt, model, sessionId, system, images = [], uploads = [], signal, onEvent }) {
+async function turn({ prompt, model, sessionId, system, images = [], uploads = [], signal, onEvent, slot = null }) {
   const emit = (e) => { try { onEvent(e); } catch { /* listener error */ } };
   if (sessionId && !/^[0-9a-f]{8,}$/i.test(sessionId)) throw new Error('Geçersiz Gemini oturum kimliği.');
   const spec = MODELS.find((m) => m.id === (model || 'default')) || MODELS[0];
@@ -452,7 +495,7 @@ async function turn({ prompt, model, sessionId, system, images = [], uploads = [
   emit({ type: 'status', text: 'Gemini penceresi hazırlanıyor…' });
   let page;
   try {
-    page = await openPage({ minimized: true });
+    page = await openPage({ minimized: true, slot });
   } catch (err) {
     throw new Error(err.message || NOT_RUNNING);
   }
@@ -462,9 +505,15 @@ async function turn({ prompt, model, sessionId, system, images = [], uploads = [
   };
   signal?.addEventListener('abort', onAbort, { once: true });
   try {
-    await navigate(page, sessionId ? `${START_URL}/${sessionId}` : START_URL, signal);
-    if (!(await page.eval(pageEnsureChat))) await sleep(600, signal);
-    if (spec.model) {
+    // Already on this conversation (the previous turn of the same task): no reload, no model menu.
+    const here = sessionId && slot && conversationId(slot.url) === sessionId
+      ? await page.eval(pageState, SEL).catch(() => null) : null;
+    const stay = !!(here?.editor && conversationId(here.url) === sessionId);
+    if (!stay) {
+      await navigate(page, sessionId ? `${START_URL}/${sessionId}` : START_URL, signal);
+      if (!(await page.eval(pageEnsureChat))) await sleep(600, signal);
+    }
+    if (spec.model && !(stay && slot.modelId === spec.id)) {
       emit({ type: 'status', text: `Model seçiliyor: ${spec.label}` });
       let mode;
       try {
@@ -478,6 +527,7 @@ async function turn({ prompt, model, sessionId, system, images = [], uploads = [
       }
       if (mode) emit({ type: 'status', text: mode.replace(/^.*şu anda\s*/i, 'Mod: ').replace(/\s*modunda$/i, '') });
     }
+    if (slot) slot.modelId = spec.model ? spec.id : null;
 
     let text = String(prompt ?? '');
     if (system && (!sessionId || systemBySession.get(sessionId) !== system)) {
@@ -585,6 +635,7 @@ async function turn({ prompt, model, sessionId, system, images = [], uploads = [
     const st = await page.eval(pageState, SEL);
     const id = conversationId(st.url) || sessionId || null;
     if (id && system) systemBySession.set(id, system);
+    if (slot) slot.url = st.url;
     emit({ type: 'message', text: shown });
     return { text: shown, sessionId: id || undefined };
   } finally {
@@ -654,17 +705,18 @@ export default {
     emit({ type: 'status', text: 'Gemini sırası bekleniyor…' });
     pendingTurns++;
     try {
-      const res = await withLock(async () => {
+      const res = await withSlot(sessionId, async (slot) => {
         if (signal?.aborted) throw new AbortError();
         try {
-          return await turn({ prompt, model, sessionId, system, images, uploads, signal, onEvent });
+          return await turn({ prompt, model, sessionId, system, images, uploads, signal, onEvent, slot });
         } catch (err) {
+          if (slot) { slot.url = ''; slot.modelId = null; } // unknown page state: reload next time
           if (!err?.stuck || signal?.aborted) throw err;
           emit({ type: 'status', text: `${err.message} Mesaj yeniden gönderiliyor…` });
           await sleep(2000, signal);
-          return turn({ prompt, model, sessionId, system, images, uploads, signal, onEvent });
+          return turn({ prompt, model, sessionId, system, images, uploads, signal, onEvent, slot });
         }
-      });
+      }, signal);
       noteSuccess();
       emit({ type: 'done', text: res.text, sessionId: res.sessionId });
       return res;

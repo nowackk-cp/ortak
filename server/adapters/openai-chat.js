@@ -274,16 +274,27 @@ export async function chatTurn({ adapter, request, fail, describe, label, body, 
       content: text || '',
       tool_calls: toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments || '{}' } })),
     });
-    for (const c of toolCalls) {
-      if (signal?.aborted) throw fail('iptal edildi');
+    const runOne = async (c) => {
       const args = parseArgs(c.arguments);
       let out;
       if (!args) out = `Hata: "${c.name}" aracının argümanları geçerli JSON değil: ${c.arguments.slice(0, 200)}`;
       else {
         try { out = String(await tools.exec(c.name, args)); } catch (err) { out = `Hata: ${err?.message || err}`; }
       }
-      messages.push({ role: 'tool', tool_call_id: c.id, content: out || '(boş)' });
-      callInfo.set(c.id, { name: c.name, path: args?.path, ok: !!out && !/^(Hata|UYGULANAMADI)/.test(out) });
+      return { c, args, out };
+    };
+    // Calls in a row that only read (tools.parallel: read_file, grep…) run at once; the others
+    // (edits, commands) one by one, in the order the model gave them. Results keep that order.
+    for (let i = 0; i < toolCalls.length;) {
+      if (signal?.aborted) throw fail('iptal edildi');
+      let j = i + 1;
+      if (tools.parallel?.has(toolCalls[i].name)) while (j < toolCalls.length && tools.parallel.has(toolCalls[j].name)) j++;
+      const done = await Promise.all(toolCalls.slice(i, j).map(runOne));
+      for (const { c, args, out } of done) {
+        messages.push({ role: 'tool', tool_call_id: c.id, content: out || '(boş)' });
+        callInfo.set(c.id, { name: c.name, path: args?.path, ok: !!out && !/^(Hata|UYGULANAMADI)/.test(out) });
+      }
+      i = j;
     }
   }
 }

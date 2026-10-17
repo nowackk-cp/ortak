@@ -24,7 +24,7 @@ async function textTurn(ctx, laneId, text) {
   history.push({ role: 'user', text: clip(text, HISTORY_MSG_MAX) });
   ctx.save();
   const before = await snapshot(ctx);
-  const res = await textChatTurn(ctx, laneId, { prompt, permission: ctx.config.permission, resume: resumable });
+  const res = await textChatTurn(ctx, laneId, { prompt, permission: ctx.config.permission, resume: resumable, mention: text });
   if (before && res.applied.length) await emitDiff(ctx, before);
   history.push({ role: 'assistant', text: clip(stripEdits(res.text), HISTORY_MSG_MAX) });
   if (history.length > HISTORY_MAX * 2) history.splice(0, history.length - HISTORY_MAX * 2);
