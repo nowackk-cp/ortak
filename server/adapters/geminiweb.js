@@ -12,6 +12,8 @@
 //
 // Text only: Gemini web cannot touch the user's files, so it is limited to read-only roles
 // (capabilities.edit = false) and its "permission" is inherently enforced (sandbox = true).
+// Project files Ortak reads for it arrive as attachments (`uploads`, capabilities.uploads), not as
+// message text; a page that won't take them gets their text in the message instead.
 //
 // The page's DOM is not a public API: Google can change it at any time. Selectors are kept in one
 // place (SEL) and every failure turns into a short Turkish error.
@@ -278,10 +280,11 @@ function pageSetEditorText(sel, text) {
 }
 
 /**
- * Pastes image files into the input box (a synthetic paste with a DataTransfer of Files — what
- * Ctrl+V does). Works in a minimized window, unlike the upload menu. `files` = [{ name, mime, b64 }].
+ * Pastes files (images, or project files as .txt) into the input box (a synthetic paste with a
+ * DataTransfer of Files — what Ctrl+V does). Works in a minimized window, unlike the upload menu.
+ * `files` = [{ name, mime, b64 }].
  */
-function pagePasteImages(sel, files) {
+function pagePasteFiles(sel, files) {
   const e = document.querySelector(sel.editor);
   if (!e) return -1;
   e.focus();
@@ -301,24 +304,36 @@ function pageImagePreviews() {
   return { count: document.querySelectorAll('uploader-file-preview').length || previews.length, busy };
 }
 
-/** Puts the user's images into the message and waits until Gemini has uploaded them. */
-async function attachImages(page, images, emit, signal) {
-  emit({ type: 'status', text: `Resimler ekleniyor (${images.length})…` });
+/**
+ * Puts files ([{ name, mime, path }]) into the message and waits until Gemini has uploaded them.
+ * `what` / `whatAcc` name them in messages ("Resimler" / "resimleri"); `timeoutMs` how long they may take.
+ */
+async function attachFiles(page, list, emit, signal, { what = 'Resimler', whatAcc = 'resimleri', timeoutMs = 90_000 } = {}) {
+  emit({ type: 'status', text: `${what} ekleniyor (${list.length})…` });
   const files = [];
-  for (const img of images) {
-    try { files.push({ name: img.name, mime: img.mime, b64: readFileSync(img.path).toString('base64') }); } catch { /* deleted meanwhile */ }
+  for (const f of list) {
+    try { files.push({ name: f.name, mime: f.mime, b64: readFileSync(f.path).toString('base64') }); } catch { /* deleted meanwhile */ }
   }
   if (!files.length) return;
   const before = (await page.eval(pageImagePreviews)).count;
-  if ((await page.eval(pagePasteImages, SEL, files)) < 0) throw new Error('Gemini yazı kutusu bulunamadı.');
-  const deadline = Date.now() + 90_000;
+  if ((await page.eval(pagePasteFiles, SEL, files)) < 0) throw new Error('Gemini yazı kutusu bulunamadı.');
+  const deadline = Date.now() + timeoutMs;
   let settled = 0;
   for (;;) {
     await sleep(500, signal);
     const st = await page.eval(pageImagePreviews);
     if (st.count >= before + files.length && !st.busy) { if (++settled >= 3) return; } else settled = 0;
-    if (Date.now() > deadline) throw new Error(`Gemini resimleri kabul etmedi (${st.count - before}/${files.length} eklendi).`);
+    if (Date.now() > deadline) throw new Error(`Gemini ${whatAcc} kabul etmedi (${st.count - before}/${files.length} eklendi).`);
   }
+}
+
+/** Removes the attachment previews after the first `keep` from the input box (after a failed upload). */
+function pageRemoveAttachments(keep) {
+  for (const p of [...document.querySelectorAll('uploader-file-preview, gem-media-attachment')].slice(keep)) {
+    const b = p.querySelector('button[aria-label*="emove" i], button[aria-label*="kaldır" i], button.cancel-button, button[class*="remove"], button[class*="cancel"]');
+    if (b) b.click();
+  }
+  return document.querySelectorAll('uploader-file-preview').length;
 }
 
 /** Characters in the editor (0 once Gemini took the message); -1 without an editor. */
@@ -429,7 +444,7 @@ async function selectModel(page, spec, signal) {
 
 const conversationId = (url) => (/\/app\/([0-9a-f]{8,})/i.exec(url || '') || [])[1] || null;
 
-async function turn({ prompt, model, sessionId, system, images = [], signal, onEvent }) {
+async function turn({ prompt, model, sessionId, system, images = [], uploads = [], signal, onEvent }) {
   const emit = (e) => { try { onEvent(e); } catch { /* listener error */ } };
   if (sessionId && !/^[0-9a-f]{8,}$/i.test(sessionId)) throw new Error('Geçersiz Gemini oturum kimliği.');
   const spec = MODELS.find((m) => m.id === (model || 'default')) || MODELS[0];
@@ -471,7 +486,20 @@ async function turn({ prompt, model, sessionId, system, images = [], signal, onE
 
     const before = await page.eval(pageReadAnswer, SEL);
     if (!(await page.eval(pageClearEditor, SEL))) throw new Error('Gemini yazı kutusu bulunamadı.');
-    if (images.length) await attachImages(page, images, emit, signal);
+    if (images.length) await attachFiles(page, images, emit, signal);
+    // Project files sent by Ortak (textcoder.js) as attachments instead of message text. If Gemini
+    // won't take them, their text goes into the message as before (nothing is lost).
+    if (uploads.length) {
+      const keep = (await page.eval(pageImagePreviews)).count;
+      try {
+        await attachFiles(page, uploads, emit, signal, { what: 'Dosyalar', whatAcc: 'dosyaları', timeoutMs: 60_000 });
+      } catch (err) {
+        if (signal?.aborted) throw new AbortError();
+        await page.eval(pageRemoveAttachments, keep).catch(() => {});
+        emit({ type: 'status', text: `${err.message} Dosyaların içeriği mesaja yazılıyor.` });
+        text += `\n\n[Dosya ekleri yüklenemedi; içerikleri aşağıda]\n\n${uploads.map((u) => u.fallback).filter(Boolean).join('\n\n')}`;
+      }
+    }
     await page.eval(pageFocusEditor, SEL);
     let filled = false;
     if (text.length > BULK_TEXT) {
@@ -498,7 +526,7 @@ async function turn({ prompt, model, sessionId, system, images = [], signal, onE
     // The send button stays disabled while attached images upload: wait for it (clicking or
     // pressing Enter earlier is silently ignored by Gemini).
     let clicked = false;
-    for (let i = 0, n = images.length ? 120 : 6; i < n && !clicked; i++) {
+    for (let i = 0, n = images.length || uploads.length ? 120 : 6; i < n && !clicked; i++) {
       clicked = await page.eval(pageSend, SEL);
       if (!clicked) await sleep(500, signal);
     }
@@ -568,7 +596,7 @@ async function turn({ prompt, model, sessionId, system, images = [], signal, onE
 export default {
   id: 'gemini',
   name: 'Gemini (web)',
-  capabilities: { edit: false, resume: true, streaming: true, cwd: false, sandbox: true, images: true },
+  capabilities: { edit: false, resume: true, streaming: true, cwd: false, sandbox: true, images: true, uploads: true },
 
   async detect() {
     try {
@@ -620,7 +648,7 @@ export default {
     return { items: [], note: 'Gemini uygulamasının kotası buradan okunamıyor; limit dolarsa Gemini hata mesajı gösterir.' };
   },
 
-  async run({ prompt, model, sessionId, system, images, signal, onEvent = () => {} }) {
+  async run({ prompt, model, sessionId, system, images, uploads, signal, onEvent = () => {} }) {
     const emit = (e) => { try { onEvent(e); } catch { /* listener error */ } };
     if (signal?.aborted) throw new AbortError();
     emit({ type: 'status', text: 'Gemini sırası bekleniyor…' });
@@ -629,12 +657,12 @@ export default {
       const res = await withLock(async () => {
         if (signal?.aborted) throw new AbortError();
         try {
-          return await turn({ prompt, model, sessionId, system, images, signal, onEvent });
+          return await turn({ prompt, model, sessionId, system, images, uploads, signal, onEvent });
         } catch (err) {
           if (!err?.stuck || signal?.aborted) throw err;
           emit({ type: 'status', text: `${err.message} Mesaj yeniden gönderiliyor…` });
           await sleep(2000, signal);
-          return turn({ prompt, model, sessionId, system, images, signal, onEvent });
+          return turn({ prompt, model, sessionId, system, images, uploads, signal, onEvent });
         }
       });
       noteSuccess();

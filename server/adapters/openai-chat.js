@@ -10,6 +10,11 @@
 
 const MAX_TOOL_STEPS = 40;
 const SAVED_TOOL_OUTPUT_MAX = 6000; // tool results kept in a saved session (older results are clipped)
+// Within one turn every step resends the whole history: once this turn's tool results pass the
+// budget, the older ones are cut to their first line (the model can call the tool again).
+const TURN_TOOL_BUDGET = 60_000; // chars
+const KEEP_RECENT_TOOLS = 4;
+const CLIPPED = '… (eski çıktı kısaltıldı; gerekirse aracı yeniden çağır)';
 
 const unsupported = new Set(); // `${adapter}:${model}` that rejected tools this process
 
@@ -91,6 +96,40 @@ export function forSaving(messages) {
     : m));
 }
 
+const clipTool = (m) => {
+  if (m.content.endsWith(CLIPPED)) return;
+  const nl = m.content.indexOf('\n');
+  const head = (nl < 0 ? m.content : m.content.slice(0, nl)).slice(0, 300);
+  m.content = `${head}\n${CLIPPED}`;
+};
+const normPath = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+
+/**
+ * Shrinks this turn's tool results (messages[from…]) in place: read_file results of a file that a
+ * later edit_file/write_file changed (they are stale), then the oldest ones while the total is over
+ * TURN_TOOL_BUDGET, always keeping the last KEEP_RECENT_TOOLS. `info` maps tool_call_id → { name, path, ok }.
+ */
+export function compactToolResults(messages, from, info = new Map(), budget = TURN_TOOL_BUDGET) {
+  const tools = [];
+  for (let i = from; i < messages.length; i++) if (messages[i].role === 'tool') tools.push(messages[i]);
+  const edited = new Map(); // path → index (in `tools`) of its last successful edit
+  tools.forEach((m, k) => {
+    const x = info.get(m.tool_call_id);
+    if (x?.ok && (x.name === 'edit_file' || x.name === 'write_file') && x.path) edited.set(normPath(x.path), k);
+  });
+  tools.forEach((m, k) => {
+    const x = info.get(m.tool_call_id);
+    if (x?.name === 'read_file' && edited.get(normPath(x.path)) > k) clipTool(m);
+  });
+  let total = tools.reduce((n, m) => n + m.content.length, 0);
+  for (const m of tools.slice(0, -KEEP_RECENT_TOOLS)) {
+    if (total <= budget) break;
+    const before = m.content.length;
+    clipTool(m);
+    total -= before - m.content.length;
+  }
+}
+
 function parseArgs(raw) {
   if (!raw || !raw.trim()) return {};
   try {
@@ -116,6 +155,8 @@ function parseArgs(raw) {
  */
 export async function chatTurn({ adapter, request, fail, describe, label, body, messages, tools, signal, emit, timeoutMs, maxSteps = MAX_TOOL_STEPS }) {
   if (!tools) messages.splice(0, messages.length, ...flattenToolHistory(messages));
+  const turnStart = messages.length;
+  const callInfo = new Map(); // tool_call_id → { name, path, ok } for compactToolResults
   const usage = { inputTokens: 0, outputTokens: 0 };
   let sawUsage = false;
   let malformed = 0;
@@ -125,6 +166,7 @@ export async function chatTurn({ adapter, request, fail, describe, label, body, 
 
   for (let step = 0; ; step++) {
     const last = tools && step >= maxSteps;
+    if (tools && step > 0) compactToolResults(messages, turnStart, callInfo);
     let res;
     try {
       res = await request('/chat/completions', {
@@ -241,6 +283,7 @@ export async function chatTurn({ adapter, request, fail, describe, label, body, 
         try { out = String(await tools.exec(c.name, args)); } catch (err) { out = `Hata: ${err?.message || err}`; }
       }
       messages.push({ role: 'tool', tool_call_id: c.id, content: out || '(boş)' });
+      callInfo.set(c.id, { name: c.name, path: args?.path, ok: !!out && !/^(Hata|UYGULANAMADI)/.test(out) });
     }
   }
 }

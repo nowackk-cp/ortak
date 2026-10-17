@@ -59,7 +59,7 @@ export async function makeContext(store, run, signal) {
      * Run one turn. Resolves { text, sessionId }. On failure rejects with the adapter error
      * (err.sawOutput tells whether the agent produced anything before failing).
      */
-    async turn(laneId, { prompt, permission = 'read-only', system, cwd, resume = true, tools }) {
+    async turn(laneId, { prompt, permission = 'read-only', system, cwd, resume = true, tools, uploads }) {
       ctx.throwIfAborted();
       const lane = ctx.lane(laneId);
       if (!lane) throw new Error(`Bilinmeyen şerit: ${laneId}`);
@@ -100,6 +100,8 @@ export async function makeContext(store, run, signal) {
         const attempt = () => abortable(Promise.resolve().then(() => adapter.run({
           prompt,
           ...(images.length ? { images: images.map(({ name, mime, path }) => ({ name, mime, path })) } : {}),
+          // Project files as attachments (textcoder.js stageUploads), for agents that take them.
+          ...(uploads?.length && adapter.capabilities?.uploads ? { uploads } : {}),
           cwd: realCwd(cwd || meta.cwd),
           model: lane.model || undefined,
           sessionId: useSession,

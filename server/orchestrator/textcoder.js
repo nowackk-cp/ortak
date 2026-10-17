@@ -8,6 +8,7 @@
 //
 //   READ: src/app.js
 //   LIST: src
+//   OUTLINE: src/app.js      (functions/classes with line numbers, outline.js)
 //   RUN: npm test
 //
 //   FILE: src/app.js
@@ -19,8 +20,14 @@
 //
 // API agents whose model supports function calling (Groq, OpenRouter, EVREN) get the same hands as
 // real tools instead (nativeTurn below); the text protocol stays the fallback.
+//
+// Agents that take attachments (capabilities.uploads: Gemini web) get the files they read as .txt
+// attachments instead of message text (Uploader below); unchanged files aren't sent twice.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { ATT_ROOT } from '../attachments.js';
+import { outlineLang, outlineText } from './outline.js';
 import * as git from '../git.js';
 import * as P from './prompts.js';
 import { clip } from '../util.js';
@@ -30,6 +37,8 @@ import * as checkpoints from '../checkpoints.js';
 const MAX_ROUNDS = 7;          // agent turns per task (reads, commands, fix-ups)
 const READ_EACH_MAX = 120_000; // chars per file sent to the agent
 const READ_TOTAL_MAX = 300_000;
+const READ_SUMMARY_LINES = 400; // read_file without a range on a longer file: outline + head
+const READ_SUMMARY_HEAD = 150;
 const LISTING_MAX = 400;
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'data', 'tools', 'dist', 'build', '.next', 'coverage', '__pycache__', '.venv', 'venv']);
 
@@ -195,19 +204,22 @@ export function parseAnswer(text) {
   const lists = [];
   const runs = [];
   const greps = [];
+  const outlines = [];
   const edits = [];
   let file = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     // Several requests on one line ("LIST: . LIST: src" / "RUN: npm test READ: a.js"): one per line.
-    const many = line.split(/\s+(?=(?:READ|OKU|LIST|LİSTE|LISTE|DIR|GREP|ARA|RUN|ÇALIŞTIR|CALISTIR|KOMUT)\s*:)/);
-    if (many.length > 1 && /^\s*(?:[-*]\s*)?(?:READ|OKU|LIST|LİSTE|LISTE|DIR|GREP|ARA|RUN|ÇALIŞTIR|CALISTIR|KOMUT)\s*:/i.test(line)) {
+    const many = line.split(/\s+(?=(?:READ|OKU|LIST|LİSTE|LISTE|DIR|GREP|ARA|OUTLINE|ANAHAT|RUN|ÇALIŞTIR|CALISTIR|KOMUT)\s*:)/);
+    if (many.length > 1 && /^\s*(?:[-*]\s*)?(?:READ|OKU|LIST|LİSTE|LISTE|DIR|GREP|ARA|OUTLINE|ANAHAT|RUN|ÇALIŞTIR|CALISTIR|KOMUT)\s*:/i.test(line)) {
       lines.splice(i, 1, ...many);
       i--;
       continue;
     }
     const grep = /^\s*(?:[-*]\s*)?(?:GREP|ARA)\s*:\s*(.+?)\s*$/i.exec(line);
     if (grep) { const g = grep[1].replace(/^`+|`+$/g, '').trim(); if (g) greps.push(g); continue; }
+    const outl = /^\s*(?:[-*]\s*)?(?:OUTLINE|ANAHAT)\s*:\s*(.*?)\s*$/i.exec(line);
+    if (outl) { outlines.push(outl[1].replace(/^[`'"]+|[`'"]+$/g, '') || '.'); continue; }
     const run = /^\s*(?:[-*]\s*)?(?:RUN|ÇALIŞTIR|CALISTIR|KOMUT)\s*:\s*(.+?)\s*$/i.exec(line);
     if (run) { const c = run[1].replace(/^`+|`+$/g, '').trim(); if (c) runs.push(c); continue; }
     const list = /^\s*(?:[-*]\s*)?(?:LIST|LİSTE|LISTE|DIR)\s*:\s*(.*?)\s*$/i.exec(line);
@@ -227,7 +239,7 @@ export function parseAnswer(text) {
       i = j;
     }
   }
-  return { reads, lists, greps, runs, edits };
+  return { reads, lists, greps, outlines, runs, edits };
 }
 
 const RUNS_PER_ROUND = 5;
@@ -283,6 +295,151 @@ export async function listDirs(cwd, paths) {
     }
   }
   return out;
+}
+
+const OUTLINE_DIR_FILES = 40; // files in a folder outline
+const OUTLINE_DIR_EACH = 12;  // definitions per file there
+
+/**
+ * Outlines (outline.js) of files or folders, relative to cwd. A folder gives a short outline of
+ * each file in it (git ls-files order). Resolves [{ path, text, error? }].
+ */
+export async function outlineFiles(cwd, specs) {
+  const out = [];
+  for (const spec of [...new Set(specs)].slice(0, 5)) {
+    try {
+      const clean = String(spec || '').trim().replace(/\\/g, '/').replace(/^\.\/|\/+$/g, '');
+      const { abs, rel } = !clean || clean === '.' ? { abs: cwd, rel: '.' } : safePath(cwd, clean);
+      const st = await fs.stat(abs);
+      if (st.isFile()) {
+        if (st.size > GREP_FILE_BYTES) throw new Error('dosya çok büyük');
+        out.push({ path: rel, text: outlineText(await fs.readFile(abs, 'utf8'), rel) });
+        continue;
+      }
+      const prefix = rel === '.' ? '' : `${rel}/`;
+      const files = (await allFiles(cwd, GREP_FILES_MAX)).filter((f) => f.startsWith(prefix) && outlineLang(f));
+      const parts = [];
+      for (const f of files.slice(0, OUTLINE_DIR_FILES)) {
+        let text;
+        try {
+          const fst = await fs.stat(path.join(cwd, f));
+          if (fst.size > GREP_FILE_BYTES) continue;
+          text = await fs.readFile(path.join(cwd, f), 'utf8');
+        } catch { continue; }
+        const body = outlineText(text, f, OUTLINE_DIR_EACH);
+        parts.push(`${f} (${text.split('\n').length} satır)\n${body.split('\n').map((l) => `  ${l}`).join('\n')}`);
+      }
+      const more = files.length - Math.min(files.length, OUTLINE_DIR_FILES);
+      out.push({ path: rel, text: (parts.join('\n') || '(ana hattı çıkarılabilen dosya yok)') + (more ? `\n… ve ${more} dosya daha (alt klasör ver)` : '') });
+    } catch (err) {
+      out.push({ path: String(spec), error: err.code === 'ENOENT' ? 'dosya ya da klasör yok' : err.message });
+    }
+  }
+  return out;
+}
+
+function outlineAndReport(cwd, specs, tool) {
+  return outlineFiles(cwd, specs).then((found) => {
+    for (const o of found) tool('Ortak: ana hat', { path: o.path }, o.error || `${o.text.split('\n').length} satır`, !!o.error);
+    return found;
+  });
+}
+
+// ---- files as attachments (capabilities.uploads: Gemini web) ----------------------------------
+
+const UPLOAD_MIN_CHARS = 1500; // smaller files stay in the message text
+const UPLOADS_MAX = 8;         // attachments per message (Gemini takes 10, the user's images included)
+const UPLOAD_ROOT = path.join(ATT_ROOT, 'yukleme');
+
+const uploadName = (f) => `${f.path.replace(/[\\/]+/g, '__').replace(/[^\w.-]+/g, '-')}${f.lines ? `__L${f.from}-${f.to}` : ''}.txt`;
+const sha1 = (t) => crypto.createHash('sha1').update(t).digest('hex');
+
+/**
+ * Sends the files a text-only agent reads as attachments when its adapter takes them. `stage(files)`
+ * writes them to a temp folder and returns them marked (`uploaded` / `unchanged`: prompts.js
+ * fileBlock prints a note instead of the content); `turn(opts)` is ctx.turn with those attachments.
+ * What a conversation already holds (lane.uploaded, per session) isn't sent again.
+ */
+export class Uploader {
+  constructor(ctx, laneId, { resume = true } = {}) {
+    this.ctx = ctx;
+    this.laneId = laneId;
+    this.on = !!ctx.adapterOf(laneId)?.capabilities?.uploads;
+    this.fresh = !resume || !ctx.canResume(laneId); // the next turn starts a new conversation
+    this.pending = [];
+    this.marks = {};
+    this.dir = null;
+  }
+
+  /** Hashes already in this lane's conversation. */
+  known() {
+    const lane = this.ctx.lane(this.laneId);
+    const up = lane?.uploaded;
+    return !this.fresh && up && up.session && up.session === lane.sessionId ? up.files || {} : {};
+  }
+
+  async stage(files) {
+    if (!this.on || !files?.length) return files || [];
+    const known = this.known();
+    const out = [];
+    const send = [];
+    for (const f of files) {
+      if (f.error || f.text.length < UPLOAD_MIN_CHARS) { out.push(f); continue; }
+      const key = f.lines ? `${f.path}:${f.from}-${f.to}` : f.path;
+      const hash = sha1(f.text);
+      const name = uploadName(f);
+      if (known[key] === hash || this.marks[key] === hash) { out.push({ ...f, unchanged: name }); continue; }
+      this.marks[key] = hash;
+      send.push({ f, name });
+      out.push({ ...f, uploaded: name });
+    }
+    if (!send.length) return out;
+    this.dir ||= path.join(UPLOAD_ROOT, `${this.ctx.meta.id}-${crypto.randomBytes(4).toString('hex')}`);
+    await fs.mkdir(this.dir, { recursive: true });
+    // Over the limit: the rest goes into one bundle file.
+    const room = Math.max(1, UPLOADS_MAX - this.pending.length);
+    const single = send.length > room ? send.slice(0, room - 1) : send;
+    const bundled = send.slice(single.length);
+    for (const { f, name } of single) {
+      const file = path.join(this.dir, name);
+      await fs.writeFile(file, `${f.text}\n`, 'utf8');
+      this.pending.push({ name, mime: 'text/plain', path: file, fallback: P.fileBlock(f) });
+    }
+    if (bundled.length) {
+      const name = `ortak-dosyalar-${this.pending.length + 1}.txt`;
+      const body = bundled.map(({ f }) => P.fileBlock(f)).join('\n\n');
+      const file = path.join(this.dir, name);
+      await fs.writeFile(file, `${body}\n`, 'utf8');
+      this.pending.push({ name, mime: 'text/plain', path: file, fallback: body });
+      const inBundle = new Set(bundled.map(({ f }) => f));
+      for (let i = 0; i < out.length; i++) {
+        const src = files[i];
+        if (inBundle.has(src)) out[i] = { ...out[i], uploaded: `${name} (içinde "### ${src.path}" başlığı)` };
+      }
+    }
+    return out;
+  }
+
+  /** ctx.turn with the staged attachments; afterwards the conversation remembers them. */
+  async turn(opts) {
+    const uploads = this.pending;
+    const marks = this.marks;
+    this.pending = [];
+    this.marks = {};
+    try {
+      const r = await this.ctx.turn(this.laneId, { ...opts, ...(uploads.length ? { uploads } : {}) });
+      if (this.on) {
+        const lane = this.ctx.lane(this.laneId);
+        const files = { ...this.known(), ...marks };
+        lane.uploaded = { session: lane.sessionId, files };
+        this.fresh = false;
+      }
+      return r;
+    } finally {
+      if (this.dir && uploads.length) await fs.rm(this.dir, { recursive: true, force: true }).catch(() => {});
+      this.dir = null;
+    }
+  }
 }
 
 /** The answer with SEARCH/REPLACE blocks folded to one line each (the diff already shows them). */
@@ -436,14 +593,15 @@ async function coderLoop(ctx, laneId, { goal, task, files = [], permission, lead
   const attached = preread || (files.length ? await readFiles(cwd, files) : []);
   if (!preread) for (const f of attached) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
 
-  let prompt = P.textCoderTask({ goal, task, listing, attached, readOnly, leadName });
+  const up = new Uploader(ctx, laneId);
+  let prompt = P.textCoderTask({ goal, task, listing, attached: await up.stage(attached), readOnly, leadName });
   const applied = new Set();
   const failedNow = new Map();
   let text = '';
   for (let round = 1; round <= MAX_ROUNDS; round++) {
-    const r = await ctx.turn(laneId, { prompt, permission: 'read-only', system: P.textCoderSystem(permission) });
+    const r = await up.turn({ prompt, permission: 'read-only', system: P.textCoderSystem(permission) });
     text = r.text;
-    const { reads, greps, runs, edits } = parseAnswer(text);
+    const { reads, greps, outlines, runs, edits } = parseAnswer(text);
 
     let results = [];
     if (edits.length) {
@@ -460,16 +618,19 @@ async function coderLoop(ctx, laneId, { goal, task, files = [], permission, lead
     const failed = results.filter((x) => !x.ok);
     const ran = runs.length ? await runCommands(ctx, cwd, runs, permission, tool) : [];
     const found = greps.length && round < MAX_ROUNDS ? await grepAndReport(cwd, greps, tool) : [];
+    const outl = outlines.length && round < MAX_ROUNDS ? await outlineAndReport(cwd, outlines, tool) : [];
     const fresh = reads.length && round < MAX_ROUNDS ? await readFiles(cwd, reads) : [];
     for (const f of fresh) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
 
     const broken = !edits.length && !readOnly && BROKEN_BLOCK.test(text);
     if (broken) tool('Ortak: değişiklik', { blocks: '?' }, 'Değişiklik blokları bozuk geldi (kod bloğu içinde değil); yeniden isteniyor.', true);
-    if (!fresh.length && !ran.length && !found.length && !failed.length && !broken) break; // finished
+    if (!fresh.length && !ran.length && !found.length && !outl.length && !failed.length && !broken) break; // finished
     if (round === MAX_ROUNDS) break;
     // Next round: requested files + command output + what failed (with the current text of those files).
     const current = failed.length ? await readFiles(cwd, [...new Set(failed.map((x) => x.path))]) : [];
-    prompt = broken && !fresh.length && !ran.length && !found.length ? P.textChatBrokenBlocks : P.textCoderFollow({ files: fresh, ran, found, results, current });
+    prompt = broken && !fresh.length && !ran.length && !found.length && !outl.length
+      ? P.textChatBrokenBlocks
+      : P.textCoderFollow({ files: await up.stage(fresh), ran, found, outlines: outl, results, current: await up.stage(current) });
   }
   return {
     text,
@@ -518,11 +679,12 @@ async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = 
   };
   tool.lane = laneId;
   const applied = new Set();
+  const up = new Uploader(ctx, laneId, { resume });
   let text = '';
   for (let round = 1; round <= CHAT_ROUNDS; round++) {
-    const r = await ctx.turn(laneId, { prompt, permission: 'read-only', system: [P.textChatSystem(permission), system].filter(Boolean).join('\n\n'), resume: round > 1 || resume });
+    const r = await up.turn({ prompt, permission: 'read-only', system: [P.textChatSystem(permission), system].filter(Boolean).join('\n\n'), resume: round > 1 || resume });
     text = r.text;
-    const { reads, lists, greps, runs, edits } = parseAnswer(text);
+    const { reads, lists, greps, outlines, runs, edits } = parseAnswer(text);
 
     let results = [];
     if (edits.length) {
@@ -542,6 +704,7 @@ async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = 
     // Commands run after the edits (so `RUN: npm test` tests the changed code).
     const ran = runs.length ? await runCommands(ctx, cwd, runs, permission, tool) : [];
     const found = greps.length && !last ? await grepAndReport(cwd, greps, tool) : [];
+    const outl = outlines.length && !last ? await outlineAndReport(cwd, outlines, tool) : [];
     const files = reads.length && !last ? await readFiles(cwd, reads) : [];
     for (const f of files) tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
     const dirs = lists.length && !last ? await listDirs(cwd, lists) : [];
@@ -552,11 +715,11 @@ async function chatLoop(ctx, laneId, { prompt, permission, resume = true, cwd = 
     const broken = !edits.length && !readOnly && BROKEN_BLOCK.test(text);
     if (broken) tool('Ortak: değişiklik', { blocks: '?' }, 'Değişiklik blokları bozuk geldi (kod bloğu içinde değil); yeniden isteniyor.', true);
 
-    if (last || (!files.length && !dirs.length && !ran.length && !found.length && !failed.length && !broken)) break;
+    if (last || (!files.length && !dirs.length && !ran.length && !found.length && !outl.length && !failed.length && !broken)) break;
     const current = failed.length ? await readFiles(cwd, [...new Set(failed.map((x) => x.path))]) : [];
-    prompt = broken && !files.length && !dirs.length && !ran.length && !found.length
+    prompt = broken && !files.length && !dirs.length && !ran.length && !found.length && !outl.length
       ? P.textChatBrokenBlocks
-      : P.textChatFollow({ files, dirs, ran, found, results: readOnly ? [] : results, current });
+      : P.textChatFollow({ files: await up.stage(files), dirs, ran, found, outlines: outl, results: readOnly ? [] : results, current: await up.stage(current) });
   }
   return { text, applied: [...applied] };
 }
@@ -588,10 +751,14 @@ export function nativeToolDefs(permission) {
   const int = (description) => ({ type: 'integer', description });
   const defs = [
     fn('list_dir', 'Bir klasörün içeriğini listeler (klasörler "/" ile biter).', { path: str('Proje köküne göre klasör yolu; kök için "."') }, ['path']),
-    fn('read_file', 'Bir dosyayı okur. Büyük dosyalarda yalnızca gereken satırları iste.', {
+    fn('read_file', `Bir dosyayı okur. Büyük dosyalarda yalnızca gereken satırları iste: ${READ_SUMMARY_LINES} satırdan uzun bir dosya aralıksız istenirse tamamı yerine ana hattı ve ilk ${READ_SUMMARY_HEAD} satırı gelir.`, {
       path: str('Proje köküne göre dosya yolu'),
       start_line: int('İlk satır (1\'den başlar, isteğe bağlı)'),
       end_line: int('Son satır (isteğe bağlı)'),
+      full: { type: 'boolean', description: 'Uzun dosyanın tamamını gerçekten istiyorsan true (bağlamı doldurur; isteğe bağlı)' },
+    }, ['path']),
+    fn('outline', 'Bir dosyanın ana hattı: fonksiyonlar, sınıflar, başlıklar ve satır numaraları. Klasör verilirse içindeki her dosyanın kısa ana hattı. Büyük dosyada neyin nerede olduğunu bulmak için read_file\'dan önce kullan.', {
+      path: str('Proje köküne göre dosya ya da klasör yolu; kök için "."'),
     }, ['path']),
     fn('grep', 'Projede düzenli ifadeyle arar (büyük/küçük harf duyarsız, .gitignore\'a uyar); eşleşmeleri dosya:satır: metin olarak verir.', {
       pattern: str('Aranacak düzenli ifade ya da metin'),
@@ -613,6 +780,22 @@ export function nativeToolDefs(permission) {
       content: str('Dosyanın tam içeriği'),
     }, ['path', 'content']),
   ];
+}
+
+/** { text, lines } of a text file in cwd longer than READ_SUMMARY_LINES, else null. */
+async function longFile(cwd, rel) {
+  try {
+    const { abs } = safePath(cwd, rel);
+    const st = await fs.stat(abs);
+    if (!st.isFile() || st.size > GREP_FILE_BYTES) return null;
+    const buf = await fs.readFile(abs);
+    if (buf.includes(0)) return null;
+    const text = buf.toString('utf8');
+    const lines = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+    return lines > READ_SUMMARY_LINES ? { text, lines } : null;
+  } catch {
+    return null;
+  }
 }
 
 const intOf = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : null);
@@ -642,10 +825,26 @@ function nativeExecutor(ctx, laneId, { cwd, permission, cp, applied, failed }) {
       case 'read_file': {
         if (!a.path) return 'Hata: path gerekli';
         const from = intOf(a.start_line), to = intOf(a.end_line);
+        // A long file asked for whole: its outline and head, so one read doesn't fill the context.
+        if (!from && !to && a.full !== true) {
+          const long = await longFile(cwd, String(a.path));
+          if (long) {
+            const [f] = await readFiles(cwd, [`${a.path}:1-${READ_SUMMARY_HEAD}`]);
+            tool('Ortak: dosya oku', { path: f.path }, f.error || `${long.lines} satırlık dosya: ana hat + ilk ${READ_SUMMARY_HEAD} satır gönderildi`, !!f.error);
+            if (f.error) return nativeFile(f);
+            return `[${f.path} · toplam ${long.lines} satır — uzun dosya: tamamı yerine ana hat ve ilk ${READ_SUMMARY_HEAD} satır gönderildi. ` +
+              'Gereken kısmı start_line/end_line ile iste (tamamı gerçekten gerekiyorsa full=true).]\n' +
+              `Ana hat:\n${outlineText(long.text, f.path)}\n\n${nativeFile(f)}`;
+          }
+        }
         const spec = from || to ? `${a.path}:${from || 1}-${to || (from || 1) + 399}` : String(a.path);
         const [f] = await readFiles(cwd, [spec]);
         tool('Ortak: dosya oku', { path: f.lines ? `${f.path}:${f.from}-${f.to}` : f.path }, readNote(f), !!f.error);
         return nativeFile(f);
+      }
+      case 'outline': {
+        const [o] = await outlineAndReport(cwd, [String(a.path || '.')], tool);
+        return o.error ? `Hata: ${o.error}` : o.text;
       }
       case 'grep': {
         if (!a.pattern) return 'Hata: pattern gerekli';

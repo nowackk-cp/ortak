@@ -248,10 +248,16 @@ function fileHeader(f) {
   return `### ${f.path} (satır ${f.from}-${f.to} / toplam ${f.lines}${f.truncated ? ', boyut sınırı nedeniyle kesildi' : ''}${more})`;
 }
 
+/** One file for the message text; files sent as attachments (textcoder.js stageUploads) get a note. */
+export function fileBlock(f) {
+  if (f.error) return `### ${f.path}\n(okunamadı: ${f.error})`;
+  if (f.uploaded) return `${fileHeader(f)} — ek dosya olarak yüklendi: \`${f.uploaded}\``;
+  if (f.unchanged) return `${fileHeader(f)} — bu sohbette daha önce yüklendi ve değişmedi: \`${f.unchanged}\` ekine bak`;
+  return `${fileHeader(f)}\n\`\`\`\n${f.text}\n\`\`\``;
+}
+
 function fileBlocks(files) {
-  return files.map((f) => (f.error
-    ? `### ${f.path}\n(okunamadı: ${f.error})`
-    : `${fileHeader(f)}\n\`\`\`\n${f.text}\n\`\`\``)).join('\n\n');
+  return files.map(fileBlock).join('\n\n');
 }
 
 /** READ / GREP lines shared by the text-only prompts. */
@@ -259,7 +265,11 @@ const READ_RULES =
   '- "READ: yol/dosya" → dosyanın içeriğini gönderir (aynı anda birden çok READ satırı yazabilirsin). Büyük dosyada yalnızca ' +
   'gereken kısmı iste: "READ: yol/dosya:120-260" (satır aralığı). Kesilen dosyanın başlığında hangi satırların geldiği yazar.\n' +
   '- "GREP: desen" → tüm projede arar, eşleşen satırları dosya:satır ile gönderir (büyük/küçük harf duyarsız düzenli ifade). ' +
-  'Bir klasörle sınırlamak için "GREP: desen @ src/". Bir şeyin nerede tanımlandığını/kullanıldığını bulmak için dosyaları tek tek okumak yerine bunu kullan.\n';
+  'Bir klasörle sınırlamak için "GREP: desen @ src/". Bir şeyin nerede tanımlandığını/kullanıldığını bulmak için dosyaları tek tek okumak yerine bunu kullan.\n' +
+  '- "OUTLINE: yol/dosya" (ya da klasör) → dosyanın ana hattını gönderir: fonksiyonlar, sınıflar, başlıklar ve satır numaraları. ' +
+  'Büyük bir dosyayı baştan sona okumadan önce bununla yerini bul, sonra yalnızca o satırları READ ile iste.\n' +
+  '- Dosyalar mesaja ek dosya (.txt) olarak da gelebilir: başlığında "ek dosya olarak yüklendi" yazan dosyanın içeriği o ektedir; ' +
+  'SEARCH kısmını ekteki metinden birebir kopyala.\n';
 
 export function textCoderTask({ goal, task, listing, attached, readOnly, leadName }) {
   const list = listing.files.join('\n') + (listing.more ? `\n… ve ${listing.more} dosya daha` : '');
@@ -286,10 +296,18 @@ function ranBlocks(ran = []) {
     : `### RUN ${r.command}\n${r.timedOut ? `Zaman aşımı: ${COMMAND_TIMEOUT_MS / 1000} sn sonra durduruldu.` : `Çıkış kodu: ${r.code}`}\n\`\`\`\n${r.output || '(çıktı yok)'}\n\`\`\``)).join('\n\n');
 }
 
-export function textCoderFollow({ files, ran = [], found = [], results, current }) {
+/** `outlines` = [{ path, text, error? }] (textcoder.js outlineFiles) */
+function outlineBlocks(outlines = []) {
+  return outlines.map((o) => (o.error
+    ? `### OUTLINE ${o.path}\n(çıkarılamadı: ${o.error})`
+    : `### OUTLINE ${o.path}\n\`\`\`\n${o.text}\n\`\`\``)).join('\n\n');
+}
+
+export function textCoderFollow({ files, ran = [], found = [], outlines = [], results, current }) {
   const parts = [];
   if (ran.length) parts.push(`Komutların sonucu:\n\n${ranBlocks(ran)}`);
   if (found.length) parts.push(`Arama sonuçları:\n\n${grepBlocks(found)}`);
+  if (outlines.length) parts.push(`Ana hatlar:\n\n${outlineBlocks(outlines)}`);
   if (results.length) {
     parts.push('Değişikliklerinin sonucu:\n' + results.map((r) => `- ${r.path}: ${r.ok ? (r.created ? 'oluşturuldu' : 'uygulandı') : `UYGULANAMADI — ${r.error}`}`).join('\n'));
   }
@@ -310,7 +328,7 @@ export function textChatSystem(permission) {
     (readOnly
       ? '- Bu çalışma SALT OKUNUR: dosya değiştiremezsin; değişiklikleri sadece öneri olarak anlat.\n'
       : '- Dosya değiştirmek/oluşturmak için SEARCH/REPLACE blokları ver; Ortak uygular ve sonucunu bildirir.\n\n' + EDIT_FORMAT + '\n') +
-    'Ortak, LIST/READ/GREP/RUN isteklerinin ve değişikliklerin sonucunu bir sonraki mesajda gönderir; sonra kaldığın yerden devam et. ' +
+    'Ortak, LIST/READ/GREP/OUTLINE/RUN isteklerinin ve değişikliklerin sonucunu bir sonraki mesajda gönderir; sonra kaldığın yerden devam et. ' +
     'Bir şey istediğin mesajı kısa tut ve cevabı uydurma: önce dosyayı oku. Kod değiştirdiysen uygunsa testleri/derlemeyi RUN ile çalıştırıp doğrula. ' +
     `İstediğin bir şey kalmadığında kullanıcıya normal cevabını yaz. ${LANG}`;
 }
@@ -332,10 +350,11 @@ export function textWorkIntro({ listing, prompt }) {
   return `Projedeki dosyalar:\n\`\`\`\n${list || '(boş)'}\n\`\`\`\n\n${prompt}`;
 }
 
-export function textChatFollow({ files, dirs, ran = [], found = [], results, current }) {
+export function textChatFollow({ files, dirs, ran = [], found = [], outlines = [], results, current }) {
   const parts = ['[Ortak] İsteklerinin sonucu:'];
   if (ran.length) parts.push(ranBlocks(ran));
   if (found.length) parts.push(grepBlocks(found));
+  if (outlines.length) parts.push(outlineBlocks(outlines));
   if (results.length) {
     parts.push('Değişiklikler:\n' + results.map((r) => `- ${r.path}: ${r.ok ? (r.created ? 'oluşturuldu' : 'uygulandı') : `UYGULANAMADI — ${r.error}`}`).join('\n'));
   }
@@ -356,6 +375,9 @@ function nativeToolRules(permission) {
   return 'Proje dosyalarına doğrudan erişimin yok; Ortak sana araçlar veriyor ve çağırdığın araçları senin yerine çalıştırıyor:\n' +
     '- list_dir: klasörün içeriği. read_file: dosya okur; büyük dosyada start_line/end_line ile yalnızca gereken kısmı iste.\n' +
     '- grep: tüm projede (ya da bir klasörde) arar. Bir şeyin nerede tanımlandığını/kullanıldığını bulmak için dosyaları tek tek okumak yerine bunu kullan.\n' +
+    '- outline: bir dosyanın (ya da klasördeki dosyaların) ana hattı: fonksiyonlar, sınıflar, başlıklar ve satır numaraları. ' +
+    'Büyük dosyayı baştan sona okumak yerine önce outline ya da grep ile yerini bul, sonra read_file ile yalnızca o aralığı oku ' +
+    '(uzun bir dosyayı aralıksız okursan Ortak tamamı yerine ana hattını ve başını gönderir). Bağlamın sınırlı: gereksiz yere büyük çıktı isteme.\n' +
     `- run_command: proje klasöründe bir ${shell().name} komutu çalıştırır ve çıktısını çıkış koduyla verir (en fazla ${COMMAND_TIMEOUT_MS / 1000} sn; ` +
     'sunucu/izleme gibi bitmeyen ya da soru soran komut kullanma).\n' +
     (readOnly
