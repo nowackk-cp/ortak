@@ -400,6 +400,12 @@ async function drive(ctx, firstPrompt, phaseTitle) {
     inflight = pending;
     pending = [];
     warnings = [];
+    // A nudge for workers the lead has left out so far (it tended to skip API / Gemini web agents).
+    const given = new Set([...tasks.values()].map((x) => x.w.lane).concat(st.log.map((r) => workers.find((w) => w.handle === r.handle)?.lane)));
+    const idle = workers.filter((w) => !given.has(w.lane));
+    if (idle.length && rounds < maxRounds) {
+      warns.push(`Şu ajanlar bu çalışmada henüz hiç görev almadı: ${idle.map((w) => `@${w.handle}`).join(', ')}. Uygun iş varsa onlara da ver.`);
+    }
     const runningNow = [...tasks.values()].filter((x) => x.status === 'running').map(view);
     const waitingNow = [...tasks.values()].filter((x) => x.status === 'waiting').map(view);
     ctx.phase('denetim', `Denetim ${rounds}${runningNow.length ? ` · ${runningNow.length} görev sürüyor` : ''}`);

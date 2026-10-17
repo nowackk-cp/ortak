@@ -411,7 +411,8 @@ export const leadSystem =
 /** `workers` = [{ handle, title, canEdit, canRun, textOnly }] */
 function teamList(workers) {
   const what = (w) => {
-    if (w.textOnly) return 'dosyalara doğrudan erişemez: Ortak onun istediği dosyaları okur, verdiği değişiklikleri uygular ve istediği komutları çalıştırır (test koşabilir)';
+    // Worded as a full team member: "can't access files" made leads skip API / Gemini web agents.
+    if (w.textOnly) return 'dosya okur, düzenler ve komut çalıştırır (test koşabilir) — bunları Ortak\'ın araçlarıyla yapar; diğer ajanlar kadar iş yapabilir, ilgili dosyaları "files" ile vermen işini hızlandırır';
     if (!w.canEdit) return 'sadece okur';
     return w.canRun ? 'dosya düzenleyebilir ve komut çalıştırabilir (test koşabilir)' : 'dosya düzenleyebilir ama bu çalışmada komut çalıştıramaz (test koşamaz)';
   };
@@ -435,7 +436,10 @@ const PARALLEL_RULES =
   'Bir görev başka bir görevin sonucuna ihtiyaç duyuyorsa onu "after" ile bağla; Ortak onu, bağlı olduğu görevler biter bitmez kendisi başlatır. ' +
   'Bu yüzden bağımlı adımlar dahil bütün planı tek seferde ver; araya girmen gerekmez.\n' +
   '- Her ajan aynı anda tek iş yapar; aynı ajana verdiğin görevler sırayla çalışır. Hız için işleri farklı ajanlara dağıt.\n' +
-  '- Aynı dosyayı değiştiren iki görev aynı anda çalışmasın: ya tek görevde birleştir ya da "after" ile sırala.\n';
+  '- Aynı dosyayı değiştiren iki görev aynı anda çalışmasın: ya tek görevde birleştir ya da "after" ile sırala.\n' +
+  '- Ekipteki HER ajanı kullan: kullanıcı onları bu iş için seçti. API modelleri ve web arayüzüyle çalışan ajanlar (ör. Gemini web / 4 Argon, Groq, OpenRouter, EVREN) da tam ekip üyesidir; ' +
+  'yalnızca kendi araçları olan ajanlara (Claude Code, Codex, Antigravity, Copilot, OpenCode…) iş verip onları atlama. ' +
+  'Bir ajana hiç görev vermeyeceksen nedenini cevabında kısaca yaz.\n';
 
 export function leadStart({ goal, workers, readOnly, maxSteps }) {
   return `Kullanıcının isteği:\n${goal}\n\nEkibin (görev verirken "agent" alanına @ işaretsiz adı yaz):\n${teamList(workers)}\n\n` +
