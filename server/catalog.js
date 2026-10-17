@@ -3,7 +3,7 @@
 // evren:glm-5.3, copilot:auto…), plus how many copies of that agent may work at the same time —
 // the lead picks the model per task and Ortak opens another lane when one copy is busy.
 import { findAdapter } from './limits.js';
-import { modelTier, tierAllowed } from './tiers.js';
+import { modelTier, workerAllowed } from './tiers.js';
 import { statsOf } from './modelstats.js';
 
 // Copies of one agent that may work at once (each its own lane and session). One browser window
@@ -36,11 +36,10 @@ export function parseRef(ref, agentIds) {
  * [{ agentId, name, own, copies, models: [{ id, ref, label, tier, tools, backup, isDefault }] }]
  * for `agents` (getAgents() output) under `budget`. `own` = the agent edits and runs commands with
  * its own tools (CLIs, Antigravity); else Ortak is its hands. `tools` = whether the model takes
- * real tool calls (API agents; undefined = unknown). Models the budget allows only as a backup
- * (subscription under free-first) are marked `backup`. CLI "default" entries are left out when the
+ * real tool calls (API agents; undefined = unknown). Claude/Codex require an explicit selection. CLI "default" entries are left out when the
  * agent lists real models (which model "default" is depends on the user's CLI settings).
  */
-export async function buildCatalog(agents, { budget = 'free-first' } = {}) {
+export async function buildCatalog(agents, { budget = 'free-first', approvedWorkers = [] } = {}) {
   const out = [];
   for (const a of agents || []) {
     if (!a?.available) continue;
@@ -51,7 +50,7 @@ export async function buildCatalog(agents, { budget = 'free-first' } = {}) {
     let adapter = null;
     for (const m of own && real.length ? real : listed) {
       const tier = m.tier || modelTier(a.id, m);
-      if (!tierAllowed(tier, budget, { backup: true })) continue;
+      if (!workerAllowed({ budget, approvedWorkers }, { agentId: a.id, model: m.id, tier })) continue;
       let tools;
       if (a.capabilities?.tools) {
         adapter ||= await findAdapter(a.id);
@@ -61,7 +60,6 @@ export async function buildCatalog(agents, { budget = 'free-first' } = {}) {
         id: m.id, ref: modelRef(a.id, m.id), label: m.label || m.id, tier, isDefault: !!m.default,
         ...(statsOf(modelRef(a.id, m.id)) ? { stats: statsOf(modelRef(a.id, m.id)) } : {}),
         ...(typeof tools === 'boolean' ? { tools } : {}),
-        ...(budget === 'free-first' && tier === 'subscription' ? { backup: true } : {}),
       });
     }
     if (!models.length) continue;

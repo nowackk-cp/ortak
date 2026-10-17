@@ -26,7 +26,7 @@ test('yönetici bütçe kurallarını ve ajanların ücret sınıfını görür;
   assert.equal(await lead.start(ctx), 'waiting');
   const first = callsOf(ctx, 'lead')[0].prompt;
   assert.match(first, /@qwen — Groq · Qwen 3\.8 — ÜCRETSİZ/);
-  assert.match(first, /@sonnet — Claude Code · Sonnet 5\.5 — ABONELİK — kullanıcının ücretli plan limitini harcar \(YEDEK\)/);
+  assert.doesNotMatch(first, /@sonnet/);
   assert.match(first, /BÜTÇE \(ücretsiz öncelikli\)/);
   assert.match(first, /KENDİ LİMİTİNİ KORU/);
   assert.match(first, /Bu çalışmanın yetkisi: DÜZENLEME — alt ajanlar proje klasöründe dosya yazar/);
@@ -196,3 +196,35 @@ test('süre sınırını aşan görev durdurulur, yarım iş notuyla başka mode
   assert.equal(statsOf('junie:junie-lite').timeouts, 1);
   assert.equal(statsOf('groq:qwen').ok >= 1, true);
 });
+
+for (const budget of ['free-only', 'free-first', 'any']) {
+  test(`Claude/Codex izinsiz çalışmaz: eski görevler ve devam et (${budget}), farklı yönetici`, async () => {
+    const ctx = fakeCtx({
+      cwd: process.cwd(), git: false,
+      config: { mode: 'lead', budget, steps: 3 },
+      lanes: [
+        { lane: 'lead', agentId: 'mock', model: 'hizli', role: 'lead', tier: 'free' },
+        { lane: 'mock-worker', agentId: 'mock', model: 'hizli', role: 'worker', tier: 'free' },
+        { lane: 'claude', agentId: 'claude', model: 'opus', role: 'worker', tier: 'subscription' },
+        { lane: 'codex', agentId: 'codex', model: 'gpt-6-astra', role: 'worker', tier: 'subscription' },
+      ],
+      agents: { mock: editAgent('mock'), claude: editAgent('claude'), codex: editAgent('codex') },
+      state: { goal: 'Eski görev', interrupted: 'limit', open: [{ id: 'old', agent: 'claude:opus', task: 'Eski iş' }] },
+      script: (lane, opts, call) => {
+        assert.ok(!['claude', 'codex'].includes(lane), 'abonelikli adaptör çağrılmamalı');
+        if (lane !== 'lead') return 'ÖZET: ücretsiz çalışan tamamladı';
+        return call.n === 1 ? JSON.stringify({ tasks: [
+          { id: 'a', agent: 'claude:opus', task: 'İzinsiz iş' },
+          { id: 'b', agent: 'codex:gpt-6-astra', task: 'İzinsiz iş' },
+          { id: 'c', agent: 'mock-worker', task: 'İzinli iş' },
+        ] }) : DONE;
+      },
+    });
+    ctx.catalogSource = async () => ['claude', 'codex'].map((agentId) => ({ agentId, models: [{ id: agentId === 'claude' ? 'opus' : 'gpt-6-astra', tier: 'subscription' }] }));
+    await lead.followUp(ctx, { text: 'devam et' });
+    assert.equal(callsOf(ctx, 'mock-worker').length, 1);
+    assert.equal(callsOf(ctx, 'claude').length + callsOf(ctx, 'codex').length, 0);
+    assert.doesNotMatch(callsOf(ctx, 'lead')[0].prompt, /@opus|@astra/);
+    await assert.rejects(lead.followUp(ctx, { text: 'devam et', lane: 'claude' }), /izinli değil/);
+  });
+}

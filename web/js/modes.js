@@ -52,9 +52,9 @@ export const PRIMARY_MODES = ['chat', 'lead'];
 
 /** Lead-mode budgets (server/tiers.js). */
 export const BUDGETS = [
-  { id: 'free-first', label: 'Ücretsiz öncelikli', short: 'ücretsiz öncelikli', desc: 'İşi ücretsiz modeller (Groq, OpenRouter, Gemini, Copilot’un dahil modelleri) ve EVREN kredisi yapar; başaramazlarsa yönetici aboneliğinizdeki bir modele (Sonnet, Codex) devredebilir.' },
+  { id: 'free-first', label: 'Ücretsiz öncelikli', short: 'ücretsiz öncelikli', desc: 'İşi ücretsiz modeller (Groq, OpenRouter, Gemini, Copilot’un dahil modelleri) ve EVREN kredisi yapar; Claude/Codex yalnızca çalışan olarak açıkça seçerseniz kullanılır.' },
   { id: 'free-only', label: 'Yalnızca ücretsiz', short: 'yalnızca ücretsiz', desc: 'Alt ajanlar yalnızca ücretsiz modeller; aboneliğinizden sadece yönetici harcar.' },
-  { id: 'any', label: 'Serbest', short: 'serbest', desc: 'Yönetici işe en uygun modeli seçer; maliyete bakmaz.' },
+  { id: 'any', label: 'Serbest', short: 'serbest', desc: 'Yönetici maliyete bakmadan model seçer; Claude/Codex çalışanları ayrıca açıkça seçilmelidir.' },
 ];
 
 // Two surfaces, like Claude's apps: Sohbet (plain conversations with any model, no project folder,

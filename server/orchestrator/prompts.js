@@ -536,11 +536,10 @@ function teamList(workers) {
 
 /** Budget rules for the lead (`budget` = free-first | free-only | any; undefined = older runs). */
 function budgetRules(budget, workers = []) {
-  const backups = workers.some((w) => w.backup);
   const out = [];
   if (budget === 'free-first') {
     out.push('- BÜTÇE (ücretsiz öncelikli): Kullanıcı Claude / ChatGPT gibi abonelik limitlerini korumak istiyor. Görevleri ÜCRETSİZ modellere ver; onlar yetmezse KREDİ modellerine.' +
-      (backups ? ' "YEDEK" işaretli ajanlara yalnızca bir görev ücretsiz ajanlarda iki kez başarısız olduysa ya da iş gerçekten en güçlü modeli gerektiriyorsa görev ver ve nedenini görev metninde tek cümleyle yaz.' : ''));
+      ' Claude/Codex yalnızca kullanıcının açıkça seçtiği çalışan modelleriyse kullanılabilir; kendi başına ekleme.');
   } else if (budget === 'free-only') {
     out.push('- BÜTÇE (yalnızca ücretsiz): Ekipte yalnızca ücretsiz ajanlar var; işi aralarında paylaştır.');
   }

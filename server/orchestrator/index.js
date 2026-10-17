@@ -168,7 +168,7 @@ export class Orchestrator {
       Object.assign(config, {
         lead: { agentId: boss.agentId, model: boss.model },
         workers: workers.map(({ agentId, model }) => ({ agentId, model })),
-        ...(auto ? { autoTeam: true } : {}),
+        ...(auto ? { autoTeam: true } : { approvedWorkers: workers.map(({ agentId, model }) => ({ agentId, model })) }),
         budget,
         steps,
         parallel: par,

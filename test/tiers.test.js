@@ -26,11 +26,11 @@ test('modelTier: model işareti ajan varsayılanını ezer', () => {
   assert.equal(modelTier('gemini', null), 'free');
 });
 
-test('autoTeam: ücretsiz öncelikli — ücretsizler + iki yedek, yönetici ve ücretliler hariç', () => {
+test('autoTeam: ücretsiz öncelikli — ücretsizler ve kredi; Claude/Codex otomatik eklenmez', () => {
   const team = autoTeam(AGENTS, { budget: 'free-first', lead: { agentId: 'claude', model: 'opus' } });
   assert.deepEqual(team.map((w) => `${w.agentId}:${w.model}:${w.tier}${w.backup ? ':yedek' : ''}`), [
     'gemini:argon-high:free', 'groq:qwen:free', 'copilot:auto:free', 'openrouter:openrouter/free:free', 'evren:glm-5.3:credit',
-    'kilo:kilo/auto/free:free', 'claude:sonnet:subscription:yedek', 'codex:default:subscription:yedek',
+    'kilo:kilo/auto/free:free',
   ]);
 });
 
@@ -40,7 +40,7 @@ test('autoTeam: yalnızca ücretsiz ve serbest', () => {
   assert.equal(free.length, 5);
   const any = autoTeam(AGENTS, { budget: 'any', lead: { agentId: 'claude', model: 'sonnet' } });
   assert.ok(!any.some((w) => w.agentId === 'claude' && w.model === 'sonnet'), 'yönetici alt ajan olmaz');
-  assert.ok(any.some((w) => w.agentId === 'claude' && w.model === 'haiku'));
+  assert.ok(!any.some((w) => ['claude', 'codex'].includes(w.agentId)));
   assert.ok(any.length <= 8);
 });
 
@@ -59,10 +59,9 @@ test('model kataloğu: sağlayıcı:model adları, bütçe, yedekler, kopya say�
   assert.deepEqual(cat.map((p) => [p.agentId, p.models.map((m) => `${m.ref}:${m.tier}${m.backup ? ':yedek' : ''}`)]), [
     ['openrouter', ['openrouter:deepseek/deepseek-v3:free:free', 'openrouter:qwen/qwen3-coder:free:free']],
     ['evren', ['evren:mini-free:free', 'evren:glm-5.3:credit']],
-    ['claude', ['claude:sonnet:subscription:yedek', 'claude:opus:subscription:yedek']],
   ]);
   assert.equal(cat[0].copies, 4);
-  assert.equal(cat[2].own, true);
+  assert.ok(!cat.some((p) => p.agentId === 'claude'));
   const only = await buildCatalog(agents, { budget: 'free-only' });
   assert.deepEqual(only.map((p) => p.agentId), ['openrouter', 'evren']);
 
@@ -77,6 +76,13 @@ test('model kataloğu: sağlayıcı:model adları, bütçe, yedekler, kopya say�
   const block = catalogBlock(cat);
   assert.match(block, /kopya: openrouter:deepseek\/deepseek-v3:free, openrouter:qwen\/qwen3-coder:free \(Qwen3 Coder 480B\)\n/);
   assert.match(block, /EVREN — KREDİ \(EVREN bakiyesi\) — Ortak onun elleri olur/);
-  assert.match(block, /Claude Code — ABONELİK \(kullanıcının plan limiti\) — YEDEK — kendi araçlarıyla/);
+  assert.doesNotMatch(block, /Claude Code/);
   assert.match(block, /aynı anda 4 kopya/);
+});
+
+test('Claude/Codex kataloğu yalnızca açıkça seçilen modeli açar; serbest bütçe tek başına izin değildir', async () => {
+  assert.ok(!(await buildCatalog(AGENTS, { budget: 'any' })).some((p) => ['claude', 'codex'].includes(p.agentId)));
+  const cat = await buildCatalog(AGENTS, { budget: 'free-first', approvedWorkers: [{ agentId: 'claude', model: 'sonnet' }] });
+  assert.deepEqual(cat.find((p) => p.agentId === 'claude').models.map((m) => m.id), ['sonnet']);
+  assert.ok(!cat.some((p) => p.agentId === 'codex'));
 });

@@ -14,7 +14,7 @@ import { stripEdits, textCoderTask, work } from './textcoder.js';
 import { errorKind, mayBeStaleSession } from '../errors.js';
 import { promptBudget, reviewDiff } from './diffview.js';
 import { getAgents, getLimits } from '../limits.js';
-import { modelTier, tierAllowed, TIER_TR } from '../tiers.js';
+import { modelTier, tierAllowed, workerAllowed, TIER_TR } from '../tiers.js';
 import { buildCatalog, copiesOf, findModel, isSlow, modelRef, parseRef } from '../catalog.js';
 import { recordTask, statsOf } from '../modelstats.js';
 
@@ -67,7 +67,7 @@ function workerList(ctx) {
   const readOnly = permission === 'read-only';
   const saved = new Map((st.handles || []).map((x) => [x.lane, x.handle]));
   const used = new Map(); // handle -> "agent:model"
-  const out = ctx.lanes('worker').map((l) => {
+  const out = ctx.lanes('worker').filter((l) => workerAllowed(ctx.config, l)).map((l) => {
     const key = modelRef(l.agentId, l.model);
     let handle = saved.get(l.lane);
     if (!handle) {
@@ -113,10 +113,11 @@ const teamView = (ctx, workers) => {
 async function loadCatalog(ctx) {
   let catalog = [];
   try {
-    catalog = ctx.catalogSource ? await ctx.catalogSource() : await buildCatalog(await getAgents(), { budget: ctx.config.budget || 'any' });
+    catalog = ctx.catalogSource ? await ctx.catalogSource() : await buildCatalog(await getAgents(), { budget: ctx.config.budget, approvedWorkers: ctx.config.autoTeam ? [] : ctx.config.approvedWorkers });
   } catch (err) {
     ctx.note(`Model kataloğu alınamadı (${err.message}); yönetici yalnızca mevcut ekiple çalışacak.`, 'warn');
   }
+  catalog = catalog.map((p) => ({ ...p, models: p.models.filter((m) => workerAllowed(ctx.config, { agentId: p.agentId, model: m.id, tier: m.tier })) })).filter((p) => p.models.length);
   await ctx.ensureAdapters(catalog.map((p) => p.agentId));
   return catalog;
 }
@@ -287,6 +288,7 @@ async function workerTurn(ctx, w, opts) {
 
 /** One task on one worker. Resolves a report for the lead; never throws except on abort. */
 async function runTask(ctx, w, t) {
+  if (!workerAllowed(ctx.config, w)) throw new HttpError(400, 'Bu çalışan kullanıcı tarafından seçilmedi veya bütçeye uygun değil.');
   const leadName = shortTitle(ctx.lane('lead')?.title) || 'Yönetici';
   const base = { handle: w.handle, title: w.title, task: t.task };
   try {
@@ -825,6 +827,7 @@ export default {
     const st = ctx.state;
     st.goal ||= ctx.config.prompt;
     const workers = workerList(ctx);
+    if (lane && lane !== 'lead' && !workers.some((x) => x.lane === lane)) throw new HttpError(400, 'Bu çalışan artık izinli değil; isteği yöneticiye gönderin.');
     const w = lane && lane !== 'lead' ? workers.find((x) => x.lane === lane) : null;
     if (w) {
       ctx.phase('ek-istek', `@${w.handle} · doğrudan istek`);

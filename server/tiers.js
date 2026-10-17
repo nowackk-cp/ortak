@@ -39,7 +39,7 @@ export function modelTier(agentId, model) {
 
 // Automatic team: which model of each agent, in the order free workers are preferred. Free API
 // agents first (fast, quota of their own), then Google's and Copilot's included models, then EVREN's
-// credit models, then the subscription backups. The lead can still use any model of the catalog.
+// credit models. Claude/Codex workers always require an explicit user selection.
 const AUTO = [
   { agentId: 'gemini', models: ['argon-high', 'pro', 'default'] },
   { agentId: 'antigravity', models: ['flash', 'pro'] },
@@ -52,18 +52,14 @@ const AUTO = [
   { agentId: 'kilo', models: [] },
   { agentId: 'junie', models: ['junie-lite'] },
   { agentId: 'mock', models: [] },
-  // subscription backups (free-first: only these two; any: all of them)
-  { agentId: 'claude', models: ['sonnet'], backup: true },
-  { agentId: 'codex', models: ['default'], backup: true },
-  { agentId: 'claude', models: ['haiku'], backup: true, extra: true },
 ];
 export const AUTO_MAX = 8;
 
-/** Whether a model of `tier` may work under `budget` (free-first: free and credit, plus backups). */
-export function tierAllowed(tier, budget, { backup = false } = {}) {
+/** Whether a model of `tier` may work under `budget` (free-first: free and credit). */
+export function tierAllowed(tier, budget) {
   if (budget === 'any') return true;
   if (budget === 'free-only') return tier === 'free';
-  return tier === 'free' || tier === 'credit' || (backup && tier === 'subscription');
+  return tier === 'free' || tier === 'credit';
 }
 
 /** The model of `agent` the auto team uses: a free one if any, then a preferred / default allowed one. */
@@ -94,10 +90,8 @@ export function autoTeam(agents, { budget = DEFAULT_BUDGET, lead } = {}) {
   for (const spec of AUTO) {
     if (out.length >= AUTO_MAX) break;
     const a = byId.get(spec.agentId);
-    if (!a) continue;
-    if (spec.backup && budget === 'free-only') continue;
-    if (spec.extra && budget !== 'any') continue;
-    const m = pickModel(a, spec.models, (tier) => tierAllowed(tier, budget, { backup: !!spec.backup }));
+    if (!a || ['claude', 'codex'].includes(a.id)) continue;
+    const m = pickModel(a, spec.models, (tier) => tierAllowed(tier, budget));
     if (!m) continue;
     const tier = modelTier(a.id, m);
     const key = `${a.id}:${m.id}`;
@@ -106,4 +100,14 @@ export function autoTeam(agents, { budget = DEFAULT_BUDGET, lead } = {}) {
     out.push({ agentId: a.id, model: m.id, name: a.name, modelLabel: m.label, tier, backup: budget === 'free-first' && tier === 'subscription' });
   }
   return out;
+}
+
+/** Subscription CLIs require an exact worker selection saved by the current server.
+ * Old lanes and a permissive budget alone never authorize Claude/Codex workers. */
+export function workerAllowed(config, worker) {
+  if (['claude', 'codex'].includes(worker.agentId)) {
+    return !config.autoTeam && (config.approvedWorkers || []).some((w) =>
+      w.agentId === worker.agentId && (w.model || null) === (worker.model || null));
+  }
+  return tierAllowed(worker.tier || modelTier(worker.agentId, null), config.budget || DEFAULT_BUDGET);
 }
